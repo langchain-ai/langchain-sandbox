@@ -42,4 +42,5 @@ jobs:
       - name: Run unit tests
         shell: bash
         run: |
+          PATH=$HOME/.deno/bin:$PATH
           make test
