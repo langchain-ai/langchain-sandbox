@@ -25,6 +25,10 @@ jobs:
     timeout-minutes: 20
     name: "make test #${{ inputs.python-version }}"
     steps:
+      - name: install deno
+        shell: bash
+        run: curl -fsSL https://deno.land/install.sh | sh
+
       - uses: actions/checkout@v4
 
       - name: Set up Python ${{ inputs.python-version }} + uv
