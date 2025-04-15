@@ -21,7 +21,8 @@ LangChain Sandbox provides a secure environment for executing untrusted Python c
 ## Limitations
 
 - **Latency**: There is a few seconds of latency when starting the sandbox per run
-- **Network requests/file access**: Currently network requests and ability to write read/files are not supported
+- **File access**: Currently not supported. You will not be able to access the files written by the sandbox.
+- **Network requests**: If you need to make network requests please use `httpx.AsyncClient` instead of `requests`.
 
 ## 🚀 Quick Install
 
