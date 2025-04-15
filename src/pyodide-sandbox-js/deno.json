@@ -1,0 +1,14 @@
+{
+  "name": "@eyurtsev/test-sandbox",
+  "version": "0.0.7",
+  "license": "MIT",
+  "exports": "./main.ts",
+  "tasks": {
+    "dev": "deno run --watch main.ts"
+  },
+  "imports": {
+    "@std/assert": "jsr:@std/assert@1",
+    "@std/cli": "jsr:@std/cli@^1.0.16",
+    "@std/path": "jsr:@std/path@^1.0.8"
+  }
+}
