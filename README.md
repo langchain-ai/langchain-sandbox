@@ -34,7 +34,7 @@ LangChain Sandbox provides a secure environment for executing untrusted Python c
 ## 💡 Example Usage
 
 ```python
-from langchain_sandbox.pyodide import PyodideSandbox
+from langchain_sandbox import PyodideSandbox
 
 # Create a sandbox instance
 sandbox = PyodideSandbox(
