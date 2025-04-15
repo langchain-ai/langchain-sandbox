@@ -146,11 +146,11 @@ class PyodideSandbox:
                 the default directory for Deno modules.
 
         """
-
-        if ',' in sessions_dir:
+        if "," in sessions_dir:
             # Very simple check to protect a user against typos.
             # The goal isn't to be exhaustive on validation here.
-            raise ValueError("Please provide a valid session directory.")
+            msg = "Please provide a valid session directory."
+            raise ValueError(msg)
 
         # Store configuration
         self.sessions_dir = sessions_dir
