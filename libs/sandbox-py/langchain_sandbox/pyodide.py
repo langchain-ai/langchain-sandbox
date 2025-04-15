@@ -1,9 +1,11 @@
+"""Python wrapper that calls pyodide & deno for code execution."""
+
 import asyncio
 import dataclasses
+import json
 import logging
 import re
 import subprocess
-import json
 import time
 from typing import Any, Literal
 
@@ -56,9 +58,10 @@ def build_permission_flag(
 class PyodideSandbox:
     """Run Python code in a sandboxed environment using Deno and Pyodide.
 
-    This executor leverages Deno's security model to create a secure runtime for executing
-    untrusted Python code. It works by spawning a Deno subprocess that loads Pyodide (Python
-    compiled to WebAssembly) and executes the provided code in an isolated environment.
+    This executor leverages Deno's security model to create a secure runtime for
+    executing untrusted Python code. It works by spawning a Deno subprocess that loads
+    Pyodide (Python compiled to WebAssembly) and executes the provided code in an
+    isolated environment.
 
     Security features:
     - Configurable permissions for file system, network, and environment access
@@ -78,7 +81,7 @@ class PyodideSandbox:
     - Streaming stdout/stderr capture
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         sessions_dir: str,
         *,
@@ -149,7 +152,7 @@ class PyodideSandbox:
 
         # Check if Deno is installed
         try:
-            subprocess.run(["deno", "--version"], check=True)
+            subprocess.run(["deno", "--version"], check=True)  # noqa: S607, S603
         except subprocess.CalledProcessError as e:
             msg = "Deno is installed, but running it failed."
             raise RuntimeError(msg) from e
@@ -241,14 +244,15 @@ class PyodideSandbox:
 
         Args:
             code: The Python code to execute in the sandbox
-            session_id: Optional session identifier for maintaining state between executions.
-                        Can be used to persist variables, imports, and definitions across
-                        multiple execute() calls. If None, a new session is created.
-            timeout_seconds: Maximum execution time in seconds before the process is terminated.
-                            If None, execution may run indefinitely (not recommended for
-                            untrusted code).
-            memory_limit_mb: Maximum memory usage in MB. Pass this to Deno to enforce memory
-                            limits in the WebAssembly VM.
+            session_id: Optional session identifier for maintaining state between
+                        executions. Can be used to persist variables, imports,
+                        and definitions across multiple execute() calls. If None,
+                        a new session is created.
+            timeout_seconds: Maximum execution time in seconds before the process
+                        is terminated. If None, execution may run indefinitely
+                        (not recommended for untrusted code).
+            memory_limit_mb: Maximum memory usage in MB. Pass this to Deno to
+                        enforce memory limits in the WebAssembly VM.
 
         Returns:
             CodeExecutionResult containing:
