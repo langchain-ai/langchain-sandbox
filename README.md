@@ -41,8 +41,10 @@ from langchain_sandbox import PyodideSandbox
 # Create a sandbox instance
 sandbox = PyodideSandbox(
    "./sessions", # Directory to store session files
+   # Allow Pyodide to install python packages that
+   # might be required.
+   allow_net=True,
 )
-
 code = """\
 import numpy as np
 x = np.array([1, 2, 3])
@@ -51,18 +53,25 @@ print(x)
 
 # Execute Python code
 print(await sandbox.execute(code, session_id="123"))
-{
-    "stdout": "array([1, 2, 3])\n",
-    "stderr": None,
-    "result": None,
-}
 
-print(await sandbox.execute("x[0]", session_id="123"))
-{
-    "stdout": None,
-    "stderr": None,
-    "result": 1,
-)
+# CodeExecutionResult(
+#   result=None, 
+#   stdout='[1 2 3]', 
+#   stderr=None, 
+#   status='success', 
+#   execution_time=2.8578367233276367
+# )
+
+# Can still access a previous result!
+print(await sandbox.execute("float(x[0])", session_id="123"))
+
+#  CodeExecutionResult(
+#     result=1, 
+#     stdout=None, 
+#     stderr=None, 
+#     status='success', 
+#     execution_time=2.7027177810668945
+# )
 ```
 
 ## 🧩 Components
