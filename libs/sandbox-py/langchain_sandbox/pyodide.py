@@ -184,7 +184,7 @@ class PyodideSandbox:
         self.permissions = []
         for flag, value, defaults in perm_defs:
             perm = build_permission_flag(flag, value=value)
-            if perm is None:
+            if perm is None and defaults is not None:
                 default_value = ",".join(defaults)
                 perm = f"{flag}={default_value}"
             if perm:
