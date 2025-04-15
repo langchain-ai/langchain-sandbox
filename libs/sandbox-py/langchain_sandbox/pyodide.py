@@ -116,11 +116,15 @@ class PyodideSandbox:
                 - List[str]: Read access restricted to specific paths, e.g.
                   ["/tmp/sandbox", "./data"]
 
+                  By default allows read to node_modules and to sessions dir
+
             allow_write: File system write access configuration:
                 - False: No file system write access (default, most secure)
                 - True: Unrestricted write access to the file system
                 - List[str]: Write access restricted to specific paths, e.g.
                   ["/tmp/sandbox/output"]
+
+                  By default allows read to node_modules and to sessions dir
 
             allow_net: Network access configuration:
                 - False: No network access (default, most secure)
@@ -152,7 +156,7 @@ class PyodideSandbox:
 
         # Check if Deno is installed
         try:
-            subprocess.run(["deno", "--version"], check=True)  # noqa: S607, S603
+            subprocess.run(["deno", "--version"], check=True, capture_output=True)  # noqa: S607, S603
         except subprocess.CalledProcessError as e:
             msg = "Deno is installed, but running it failed."
             raise RuntimeError(msg) from e
@@ -164,8 +168,8 @@ class PyodideSandbox:
         # each tuple contains (flag, setting, defaults)
         perm_defs = [
             ("--allow-env", allow_env, None),
-            ("--allow-read", allow_read, [sessions_dir]),
-            ("--allow-write", allow_write, [sessions_dir]),
+            ("--allow-read", allow_read, [sessions_dir, "node_modules"]),
+            ("--allow-write", allow_write, [sessions_dir, "node_modules"]),
             ("--allow-net", allow_net, None),
             ("--allow-run", allow_run, None),
             ("--allow-ffi", allow_ffi, None),
