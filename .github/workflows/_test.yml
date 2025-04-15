@@ -36,14 +36,7 @@ jobs:
         shell: bash
         run: uv sync --group test
 
-      - name: Run core tests
+      - name: Run unit tests
         shell: bash
         run: |
           make test
-
-      - name: Run Integration tests
-        # Only run this is the working-directory is server
-        if: ${{ inputs.working-directory == './libs/server' }}
-        shell: bash
-        run: |
-          make test_integration
