@@ -33,7 +33,6 @@ def build_permission_flag(
     flag: str,
     *,
     value: bool | list[str],
-    default_values: list[str] | None = None,
 ) -> str | None:
     """Build a permission flag string based on the provided setting.
 
@@ -50,8 +49,7 @@ def build_permission_flag(
     if value is True:
         return flag
     if isinstance(value, list) and value:
-        finalized_values = value if default_values is None else value + default_values
-        return f"{flag}={','.join(finalized_values)}"
+        return f"{flag}={','.join(value)}"
     return None
 
 
@@ -148,6 +146,12 @@ class PyodideSandbox:
                 the default directory for Deno modules.
 
         """
+
+        if ',' in sessions_dir:
+            # Very simple check to protect a user against typos.
+            # The goal isn't to be exhaustive on validation here.
+            raise ValueError("Please provide a valid session directory.")
+
         # Store configuration
         self.sessions_dir = sessions_dir
 
@@ -168,6 +172,8 @@ class PyodideSandbox:
         # each tuple contains (flag, setting, defaults)
         perm_defs = [
             ("--allow-env", allow_env, None),
+            # For file system permissions, if no permission is specified,
+            # force session_dir and node_modules
             ("--allow-read", allow_read, [sessions_dir, "node_modules"]),
             ("--allow-write", allow_write, [sessions_dir, "node_modules"]),
             ("--allow-net", allow_net, None),
@@ -177,11 +183,10 @@ class PyodideSandbox:
 
         self.permissions = []
         for flag, value, defaults in perm_defs:
-            perm = build_permission_flag(flag, value=value, default_values=defaults)
-            # For file system permissions, if no permission is specified,
-            # force at least sessions_dir.
-            if perm is None and flag in ("--allow-read", "--allow-write"):
-                perm = f"{flag}={sessions_dir}"
+            perm = build_permission_flag(flag, value=value)
+            if perm is None:
+                default_value = ",".join(defaults)
+                perm = f"{flag}={default_value}"
             if perm:
                 self.permissions.append(perm)
 
