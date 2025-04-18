@@ -165,11 +165,28 @@ async function initPyodide(pyodide: any): Promise<void> {
   const sys = pyodide.pyimport("sys");
   const pathlib = pyodide.pyimport("pathlib");
 
-  const dirPath = "/tmp/pyodide_worker_runner/";
+  const dirPath = ".session/";
   sys.path.append(dirPath);
-  pathlib.Path(dirPath).mkdir();
+  pathlib.Path(dirPath).mkdir()
   pathlib.Path(dirPath + "prepare_env.py").write_text(prepareEnvCode);
 }
+
+async function listSessionFiles(sessionName: string, sessionsDir: string): Promise<string[]> {
+  const sessionDirPath = join(sessionsDir, sessionName);
+  try {
+    const files: string[] = [];
+    for await (const entry of Deno.readDir(sessionDirPath)) {
+      if (entry.isFile) {
+        files.push(entry.name);
+      }
+    }
+    return files;
+  } catch (err) {
+    console.error(`Error reading session directory: ${err.message}`);
+    return [];
+  }
+}
+
 
 async function runPython(
   pythonCode: string,
@@ -181,157 +198,185 @@ async function runPython(
   const output: string[] = [];
   const err_output: string[] = [];
   const originalLog = console.log;
-  console.log = (...args: any[]) => {}
+  // console.log = (...args: any[]) => {}
+  let artifactsDirPath: string;
 
-  try {
-    const pyodide = await loadPyodide({
-      stdout: (msg) => output.push(msg),
-      stderr: (msg) => err_output.push(msg),
-    })
-    await pyodide.loadPackage(["micropip"], {
-      messageCallback: () => {},
-      errorCallback: (msg: string) => {
-        output.push(`install error: ${msg}`)
-      },
-    });
-    await initPyodide(pyodide);
+  const pyodide = await loadPyodide({
+    stdout: (msg) => output.push(msg),
+    stderr: (msg) => err_output.push(msg),
+  })
+  await pyodide.loadPackage(["micropip"], {
+    messageCallback: () => {},
+    errorCallback: (msg: string) => {
+      output.push(`install error: ${msg}`)
+    },
+  });
+  await initPyodide(pyodide);
 
-    // Determine session directory
-    const sessionsDir = options.sessionsDir || Deno.cwd();
-    let sessionMetadata: SessionMetadata = {
-      created: new Date().toISOString(),
-      lastModified: new Date().toISOString(),
-      packages: [],
-    };
-    let sessionJsonPath: string;
-    let isExistingSession = false;
+  // Determine session directory
+  const sessionsDir = options.sessionsDir || Deno.cwd();
+  let sessionMetadata: SessionMetadata = {
+    created: new Date().toISOString(),
+    lastModified: new Date().toISOString(),
+    packages: [],
+  };
+  let sessionJsonPath: string;
+  let isExistingSession = false;
 
-    // Handle session if provided
-    if (options.session) {
-      // Create session directory path
-      const sessionDirPath = join(sessionsDir, options.session);
-      const sessionPklPath = join(sessionDirPath, `session.pkl`);
-      sessionJsonPath = join(sessionDirPath, `session.json`);
-      
-      // Ensure session directory exists
-      try {
-        const dirInfo = await Deno.stat(sessionDirPath);
-        if (!dirInfo.isDirectory) {
-          console.error(`Path exists but is not a directory: ${sessionDirPath}`);
-          return { success: false, error: `Path exists but is not a directory: ${sessionDirPath}` };
-        }
-      } catch (error) {
-        // Directory doesn't exist, create it
-        if (error instanceof Deno.errors.NotFound) {
-          try {
-            await Deno.mkdir(sessionDirPath, { recursive: true });
-          } catch (mkdirError: any) {
-            console.error(`Error creating session directory: ${mkdirError.message}`);
-            return { success: false, error: mkdirError.message };
-          }
-        } else {
-          console.error(`Error accessing session directory: ${(error as Error).message}`);
-          return { success: false, error: (error as Error).message };
-        }
+  // Handle session if provided
+  if (options.session) {
+    // Create session directory path
+    const sessionDirPath = join(sessionsDir, options.session);
+    const sessionPklPath = join(sessionDirPath, `session.pkl`);
+    sessionJsonPath = join(sessionDirPath, `session.json`);
+    artifactsDirPath = join(sessionDirPath, "artifacts");
+
+
+    await Deno.mkdir(artifactsDirPath, { recursive: true });
+
+    
+    // Ensure session directory exists
+    try {
+      const dirInfo = await Deno.stat(sessionDirPath);
+      if (!dirInfo.isDirectory) {
+        console.error(`Path exists but is not a directory: ${sessionDirPath}`);
+        return { success: false, error: `Path exists but is not a directory: ${sessionDirPath}` };
       }
-
-      try {
-        // Check if both session pickle and metadata files exist
-        const [pklStat, jsonStat] = await Promise.all([
-          Deno.stat(sessionPklPath),
-          Deno.stat(sessionJsonPath)
-        ]).catch(() => [null, null]);
-        
-        isExistingSession = (pklStat?.isFile && jsonStat?.isFile) || false;
-      } catch {
-        // Error checking files, assume they don't exist
-        isExistingSession = false;
-      }
-
-      // Create or load session metadata
-      if (!isExistingSession) {
-        // Create new session metadata file
-        await Deno.writeTextFile(
-          sessionJsonPath,
-          JSON.stringify(sessionMetadata, null, 2)
-        );
+    } catch (error) {
+      // Directory doesn't exist, create it
+      if (error instanceof Deno.errors.NotFound) {
+        try {
+          await Deno.mkdir(sessionDirPath, { recursive: true });
+        } catch (mkdirError: any) {
+          console.error(`Error creating session directory: ${mkdirError.message}`);
+          return { success: false, error: mkdirError.message };
+        }
       } else {
-        // Load existing session metadata
-        const jsonContent = await Deno.readTextFile(sessionJsonPath);
-        sessionMetadata = JSON.parse(jsonContent);
-      }
-
-      // Load PKL file into pyodide if it exists
-      try {
-        const sessionData = await Deno.readFile(sessionPklPath);
-        pyodide.FS.writeFile(`/${options.session}.pkl`, sessionData);
-      } catch (error) {
-        // File doesn't exist or can't be read, skip loading
+        console.error(`Error accessing session directory: ${(error as Error).message}`);
+        return { success: false, error: (error as Error).message };
       }
     }
 
-    // Import our prepared environment module
-    const prepare_env = pyodide.pyimport("prepare_env");
-    
-    // Prepare additional packages to install (include dill if using sessions)
-    const additionalPackagesToInstall = options.session
-      ? [...new Set([...sessionMetadata.packages, "dill"])]
-      : [];
-
-    const installedPackages = await prepare_env.install_imports(
-      pythonCode,
-      additionalPackagesToInstall,
-    );
-
-    if (options.session && isExistingSession) {
-      // Run session preamble
-      await prepare_env.load_session(`/${options.session}.pkl`);
+    try {
+      // Check if both session pickle and metadata files exist
+      const [pklStat, jsonStat] = await Promise.all([
+        Deno.stat(sessionPklPath),
+        Deno.stat(sessionJsonPath)
+      ]).catch(() => [null, null]);
+      
+      isExistingSession = (pklStat?.isFile && jsonStat?.isFile) || false;
+    } catch {
+      // Error checking files, assume they don't exist
+      isExistingSession = false;
     }
 
-    const packages = installedPackages.map((pkg: any) => pkg.get("package"));
-
-    // Restore the original console.log function
-    console.log = originalLog;
-    // Run the Python code
-    const rawValue = await pyodide.runPythonAsync(pythonCode);
-    // Dump result to string
-    const jsonValue = await prepare_env.dumps(rawValue);
-    
-    if (options.session) {
-      // Save session state
-      await prepare_env.dump_session(`/${options.session}.pkl`);
-
-      // Update session metadata with installed packages
-      sessionMetadata.packages = [
-        ...new Set([...sessionMetadata.packages, ...packages]),
-      ];
-      sessionMetadata.lastModified = new Date().toISOString();
+    // Create or load session metadata
+    if (!isExistingSession) {
+      // Create new session metadata file
       await Deno.writeTextFile(
-        sessionJsonPath as string,
+        sessionJsonPath,
         JSON.stringify(sessionMetadata, null, 2)
       );
-
-      // Save session file back to host machine
-      const sessionData = pyodide.FS.readFile(`/${options.session}.pkl`);
-      const sessionDirPath = join(sessionsDir, options.session);
-      const sessionPklPath = join(sessionDirPath, `session.pkl`);
-      await Deno.writeFile(sessionPklPath, sessionData);
+    } else {
+      // Load existing session metadata
+      const jsonContent = await Deno.readTextFile(sessionJsonPath);
+      sessionMetadata = JSON.parse(jsonContent);
     }
-    // Return the result with stdout and stderr output
-    return { 
-      success: true, 
-      result: rawValue,
-      jsonResult: jsonValue,
-      stdout: output,
-      stderr: err_output
-    };
-  } catch (error: any) {
-    return { 
-      success: false, 
-      error: error.message,
-      stdout: output,
-      stderr: err_output
-    };
+
+    // Load PKL file into pyodide if it exists
+    try {
+      const sessionData = await Deno.readFile(sessionPklPath);
+      pyodide.FS.writeFile(`/${options.session}.pkl`, sessionData);
+    } catch (error) {
+      // File doesn't exist or can't be read, skip loading
+    }
+  }
+
+
+  // // MOUNT ARTIFACTS AS ROOT
+  // if (pyodide.FS.analyzePath("/").exists) {
+  //   try {
+  //     pyodide.FS.unmount("/");
+  //   } catch (_) {}
+  // }
+
+  // if (options.session) {
+  //   // MOUNT ARTIFACTS AS ROOT
+  //   pyodide.FS.mount(pyodide.FS.filesystems.NODEFS, {
+  //     root: artifactsDirPath,
+  //   }, "/");
+  // }
+
+
+  // Import our prepared environment module
+  const prepare_env = pyodide.pyimport("prepare_env");
+  
+  // Prepare additional packages to install (include dill if using sessions)
+  const additionalPackagesToInstall = options.session
+    ? [...new Set([...sessionMetadata.packages, "dill"])]
+    : [];
+
+  const installedPackages = await prepare_env.install_imports(
+    pythonCode,
+    additionalPackagesToInstall,
+  );
+
+  if (options.session && isExistingSession) {
+    // Run session preamble
+    await prepare_env.load_session(`/${options.session}.pkl`);
+  }
+
+  const packages = installedPackages.map((pkg: any) => pkg.get("package"));
+
+  // Restore the original console.log function
+  console.log = originalLog;
+  // Run the Python code
+  const rawValue = await pyodide.runPythonAsync(pythonCode);
+  // Dump result to string
+  const jsonValue = await prepare_env.dumps(rawValue);
+  
+  if (options.session) {
+    // Save session state
+    await prepare_env.dump_session(`/${options.session}.pkl`);
+
+    // Update session metadata with installed packages
+    sessionMetadata.packages = [
+      ...new Set([...sessionMetadata.packages, ...packages]),
+    ];
+    sessionMetadata.lastModified = new Date().toISOString();
+    await Deno.writeTextFile(
+      sessionJsonPath as string,
+      JSON.stringify(sessionMetadata, null, 2)
+    );
+
+    // Save session file back to host machine
+    const sessionData = pyodide.FS.readFile(`/${options.session}.pkl`);
+    const sessionDirPath = join(sessionsDir, options.session);
+    const sessionPklPath = join(sessionDirPath, `session.pkl`);
+    await Deno.writeFile(sessionPklPath, sessionData);
+  }
+  // Return the result with stdout and stderr output
+  return { 
+    success: true, 
+    result: rawValue,
+    jsonResult: jsonValue,
+    stdout: output,
+    stderr: err_output
+  };
+}
+
+async function listArtifacts(sessionName: string, sessionsDir: string): Promise<string[]> {
+  const artifactsPath = join(sessionsDir, sessionName, "artifacts");
+  try {
+    const files: string[] = [];
+    for await (const entry of Deno.readDir(artifactsPath)) {
+      if (entry.isFile) {
+        files.push(entry.name);
+      }
+    }
+    return files;
+  } catch {
+    return [];
   }
 }
 
@@ -379,12 +424,7 @@ OPTIONS:
   };
 
   if (!options.code && !options.file) {
-    const errorJson = {
-      stdout: '',
-      stderr: "Error: You must provide Python code using either -c/--code or -f/--file option.\nUse --help for usage information.",
-      result: null
-    };
-    console.log(JSON.stringify(errorJson));
+    console.error("Error: You must provide Python code using either -c/--code or -f/--file option.\nUse --help for usage information.")
     Deno.exit(1);
   }
 
@@ -445,6 +485,11 @@ OPTIONS:
     sessionsDir: options.sessionsDir,
   });
 
+  let artifacts: string[] | null = null;
+  if (options.session && options.sessionsDir) {
+    artifacts = await listArtifacts(options.session, options.sessionsDir);
+  }
+
   // Exit with error code if Python execution failed
   // Create output JSON with stdout, stderr, and result
   const outputJson = {
@@ -452,7 +497,9 @@ OPTIONS:
     stderr: result.success ? (result.stderr.join('') || null) : result.error || null,
     result: result.success ? JSON.parse(result.jsonResult || 'null') : null,
     success: result.success,
+    files: artifacts,
   };
+
 
   // Output as JSON to stdout
   console.log(JSON.stringify(outputJson));
