@@ -344,10 +344,10 @@ async function main(): Promise<void> {
       s: "session",
       d: "sessions-dir",
       h: "help",
-      V: "version"
+      V: "version",
     },
     boolean: ["help", "version"],
-    default: { help: false, version: false }
+    default: { help: false, version: false },
   });
 
   if (flags.help) {
@@ -375,16 +375,13 @@ OPTIONS:
     code: flags.code,
     file: flags.file,
     session: flags.session,
-    sessionsDir: flags["sessions-dir"]
+    sessionsDir: flags["sessions-dir"],
   };
 
   if (!options.code && !options.file) {
-    const errorJson = {
-      stdout: '',
-      stderr: "Error: You must provide Python code using either -c/--code or -f/--file option.\nUse --help for usage information.",
-      result: null
-    };
-    console.log(JSON.stringify(errorJson));
+    console.error(
+      "Error: You must provide Python code using either -c/--code or -f/--file option.\nUse --help for usage information."
+    );
     Deno.exit(1);
   }
 
@@ -405,7 +402,9 @@ OPTIONS:
       try {
         const dirInfo = await Deno.stat(options.sessionsDir);
         if (!dirInfo.isDirectory) {
-          throw new Error(`Path exists but is not a directory: ${options.sessionsDir}`);
+          throw new Error(
+            `Path exists but is not a directory: ${options.sessionsDir}`
+          );
         }
       } catch (error) {
         // Directory doesn't exist, create it
