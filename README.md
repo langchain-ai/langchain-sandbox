@@ -77,7 +77,7 @@ print(await sandbox.execute("float(x[0])", session_id="123"))
 
 ### Using as a tool
 
-You can use `PyodideSandbox` as a LangChain tool inside an agent.
+You can use `PyodideSandbox` as a LangChain tool:
 
 ```python
 from langchain_sandbox import PyodideSandboxTool
