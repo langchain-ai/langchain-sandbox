@@ -1,8 +1,7 @@
-from typing import Any, Optional
 
 from langchain_core.callbacks import (
-    CallbackManagerForToolRun,
     AsyncCallbackManagerForToolRun,
+    CallbackManagerForToolRun,
 )
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
@@ -44,20 +43,21 @@ class PyodideSandboxTool(BaseTool):
         self,
         code: str,
         config: RunnableConfig,
-        run_manager: Optional[CallbackManagerForToolRun] = None,
-    ) -> Any:
+        run_manager: CallbackManagerForToolRun | None = None,
+    ) -> str:
         """Use the tool."""
-        raise NotImplementedError(
+        error_msg = (
             "Sync invocation of PyodideSandboxTool is not supported - "
             "please invoke the tool asynchronously using `await tool.ainvoke()`"
         )
+        raise NotImplementedError(error_msg)
 
     async def _arun(
         self,
         code: str,
         config: RunnableConfig,
-        run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
-    ) -> Any:
+        run_manager: AsyncCallbackManagerForToolRun | None = None,
+    ) -> str:
         """Use the tool asynchronously."""
         session_id = config.get("configurable", {}).get("thread_id")
         result = await self.sandbox.execute(code, session_id=session_id)
