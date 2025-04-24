@@ -48,19 +48,21 @@ class PyodideSandboxTool(BaseTool):
 
     ```python
     from langgraph.prebuilt import create_react_agent
+    from langgraph.checkpoint.memory import InMemorySaver
     from langchain_sandbox import PyodideSandboxTool
 
     tool = PyodideSandboxTool()
     agent = create_react_agent(
-       "anthropic:claude-3-7-sonnet-latest",
-       tools=[tool],
+        "anthropic:claude-3-7-sonnet-latest",
+        tools=[tool],
+        checkpointer=InMemorySaver()
     )
     result = await agent.ainvoke(
-        "what's 5 + 7?",
+        {"messages": [{"role": "user", "content": "what's 5 + 7?"}]},
         config={"configurable": {"thread_id": "123"}},
     )
     second_result = await agent.ainvoke(
-        "what's the sine of that?",
+        {"messages": [{"role": "user", "content": "what's the sine of that?"}]},
         config={"configurable": {"thread_id": "123"}},
     )
     ```

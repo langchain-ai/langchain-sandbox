@@ -75,6 +75,62 @@ print(await sandbox.execute("float(x[0])", session_id="123"))
 # )
 ```
 
+### Using as a tool
+
+You can use `PyodideSandbox` as a LangChain tool inside an agent.
+
+```python
+from langchain_sandbox import PyodideSandboxTool
+
+tool = PyodideSandboxTool()
+result = await tool.ainvoke("print('Hello, world!')")
+```
+
+If you want to persist state between code executions (to persist variables, imports,
+and definitions, etc.), you need to invoke the tool with `thread_id` in the config:
+
+```python
+code = """\
+import numpy as np
+x = np.array([1, 2, 3])
+print(x)
+"""
+result = await tool.ainvoke(
+    code,
+    config={"configurable": {"thread_id": "123"}},
+)
+
+second_result = await tool.ainvoke(
+    "print(float(x[0]))",  # tool is aware of the previous result
+    config={"configurable": {"thread_id": "123"}},
+)
+```
+
+### Using with an agent
+
+You can use `PyodideSandboxTool` inside a LangGraph agent. If you are using this tool inside an agent, you can invoke the agent with a config, and it will automatically be passed to the tool:
+
+```python
+from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.memory import InMemorySaver
+from langchain_sandbox import PyodideSandboxTool
+
+tool = PyodideSandboxTool()
+agent = create_react_agent(
+    "anthropic:claude-3-7-sonnet-latest",
+    tools=[tool],
+    checkpointer=InMemorySaver()
+)
+result = await agent.ainvoke(
+    {"messages": [{"role": "user", "content": "what's 5 + 7? save result "}]},
+    config={"configurable": {"thread_id": "123"}},
+)
+second_result = await agent.ainvoke(
+    {"messages": [{"role": "user", "content": "what's the sine of that?"}]},
+    config={"configurable": {"thread_id": "123"}},
+)
+```
+
 ## 🧩 Components
 
 The sandbox consists of two main components:
