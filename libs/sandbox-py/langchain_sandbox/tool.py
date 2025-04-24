@@ -1,3 +1,4 @@
+"""LangChain tool for running python code in a PyodideSandbox."""
 
 from langchain_core.callbacks import (
     AsyncCallbackManagerForToolRun,
@@ -27,7 +28,43 @@ class PythonInputs(BaseModel):
 
 
 class PyodideSandboxTool(BaseTool):
-    """Tool for running python code in a PyodideSandbox."""
+    """Tool for running python code in a PyodideSandbox.
+
+    If you want to persist state between code executions (to persist variables, imports,
+    and definitions, etc.), you need to invoke the tool with `thread_id` in the config:
+
+    ```python
+    from langchain_sandbox import PyodideSandboxTool
+
+    tool = PyodideSandboxTool()
+    result = await tool.ainvoke(
+        "print('Hello, world!')",
+        config={"configurable": {"thread_id": "123"}},
+    )
+    ```
+
+    If you are using this tool inside an agent, like LangGraph `create_react_agent`, you
+    can invoke the agent with a config, and it will automatically be passed to the tool:
+
+    ```python
+    from langgraph.prebuilt import create_react_agent
+    from langchain_sandbox import PyodideSandboxTool
+
+    tool = PyodideSandboxTool()
+    agent = create_react_agent(
+       "anthropic:claude-3-7-sonnet-latest",
+       tools=[tool],
+    )
+    result = await agent.ainvoke(
+        "what's 5 + 7?",
+        config={"configurable": {"thread_id": "123"}},
+    )
+    second_result = await agent.ainvoke(
+        "what's the sine of that?",
+        config={"configurable": {"thread_id": "123"}},
+    )
+    ```
+    """
 
     name: str = "python_code_sandbox"
     description: str = (
