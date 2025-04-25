@@ -1,5 +1,6 @@
 # pip install langgraph "langchain[anthropic]"
 import asyncio
+import uuid
 
 from langchain_sandbox import PyodideSandbox, PyodideSandboxTool
 from langgraph.prebuilt import create_react_agent
@@ -35,4 +36,4 @@ async def run_agent(query: str, thread_id: str):
 
 if __name__ == "__main__":
     # Run the agent
-    asyncio.run(run_agent(query, "1"))
+    asyncio.run(run_agent(query, str(uuid.uuid4())))

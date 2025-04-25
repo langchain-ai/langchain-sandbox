@@ -1,6 +1,7 @@
 # pip install langgraph-codeact "langchain[anthropic]"
 import asyncio
 import inspect
+import uuid
 from typing import Any
 
 from langchain.chat_models import init_chat_model
@@ -24,7 +25,9 @@ def create_pyodide_eval_fn(
     """
     sandbox = PyodideSandbox(sandbox_dir, allow_net=True)
 
-    async def async_eval_fn(code: str, _locals: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    async def async_eval_fn(
+        code: str, _locals: dict[str, Any]
+    ) -> tuple[str, dict[str, Any]]:
         # Create a wrapper function that will execute the code and return locals
         wrapper_code = f"""
 def execute():
@@ -60,7 +63,9 @@ execute()
 
             # Get the output from stdout
             output = (
-                response.stdout if response.stdout else "<Code ran, no output printed to stdout>"
+                response.stdout
+                if response.stdout
+                else "<Code ran, no output printed to stdout>"
             )
             result = response.result
 
@@ -70,7 +75,9 @@ execute()
 
             # Get the new variables by comparing with original locals
             new_vars = {
-                k: v for k, v in result.items() if k not in _locals and not k.startswith("_")
+                k: v
+                for k, v in result.items()
+                if k not in _locals and not k.startswith("_")
             }
             return output, new_vars
 
@@ -165,11 +172,17 @@ query = """A batter hits a baseball at 45.847 m/s at an angle of 23.474° above 
 async def run_agent(query: str, thread_id: str):
     config = {"configurable": {"thread_id": thread_id}}
     # Stream agent outputs
-    async for chunk in agent.astream({"messages": query}, config):
-        print(chunk)
-        print("\n")
+    async for typ, chunk in agent.astream(
+        {"messages": query},
+        stream_mode=["values", "messages"],
+        config=config,
+    ):
+        if typ == "messages":
+            print(chunk[0].content, end="")
+        elif typ == "values":
+            print("\n\n---answer---\n\n", chunk)
 
 
 if __name__ == "__main__":
     # Run the agent
-    asyncio.run(run_agent(query, "1"))
+    asyncio.run(run_agent(query, str(uuid.uuid4())))
