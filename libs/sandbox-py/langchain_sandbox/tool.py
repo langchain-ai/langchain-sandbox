@@ -70,10 +70,11 @@ class PyodideSandboxTool(BaseTool):
 
     name: str = "python_code_sandbox"
     description: str = (
-        "A secure Python code sandbox. Use this to execute python commands. "
-        "Input should be a valid python command. "
-        "If you want to see the output of a value, you should print it out "
-        "with `print(...)`. Don't use f-strings when printing outputs."
+        "A secure Python code sandbox. Use this to execute python commands.\n"
+        "- Input should be a valid python command.\n"
+        "- To return output, you should print it out with `print(...)`.\n"
+        "- Don't use f-strings when printing outputs.\n"
+        "- If you need to make web requests, use `httpx.AsyncClient`."
     )
     sandbox: PyodideSandbox = Field(default_factory=_get_default_pyodide_sandbox)
     args_schema: type[BaseModel] = PythonInputs
