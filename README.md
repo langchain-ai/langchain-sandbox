@@ -1,5 +1,3 @@
-> Under development. Feel free to test out and provide feedback.
-
 # 🛡️ LangChain Sandbox
 
 > A secure environment for running Python code using Pyodide (WebAssembly) and Deno
