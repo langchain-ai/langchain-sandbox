@@ -9,7 +9,7 @@ from langchain_sandbox import PyodideSandbox
 
 
 @contextmanager
-def sandbox_context(  # noqa: PLR0913
+def sandbox_context(
     *,
     allow_read: list[str] | str | bool = "node_modules",
     allow_write: list[str] | str | bool = "node_modules",

@@ -4,15 +4,19 @@ import asyncio
 import dataclasses
 import json
 import logging
+import os
 import re
 import subprocess
 import time
+from pathlib import Path
 from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
 
 Status = Literal["success", "error"]
+
+current_dir = Path(__file__).parent
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -24,9 +28,17 @@ class CodeExecutionResult:
     stderr: str | None = None
     status: Status
     execution_time: float
+    session_metadata: dict | None = None
+    session_bytes: bytes | None = None
 
 
+# Published package name
 PKG_NAME = "jsr:@eyurtsev/test-sandbox@0.0.7"
+LOCAL_PKG_PATH = str(current_dir / "../../pyodide-sandbox-js/main.ts")
+# Use published package or local path based on environment variable
+PYODIDE_USE_LOCAL_PACKAGE = (
+    os.environ.get("PYODIDE_USE_LOCAL_PACKAGE", "").lower() == "true"
+)
 
 
 def build_permission_flag(
@@ -79,7 +91,7 @@ class PyodideSandbox:
     - Streaming stdout/stderr capture
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         sessions_dir: str,
         *,
@@ -228,6 +240,8 @@ class PyodideSandbox:
         code: str,
         *,
         session_id: str | None = None,
+        session_bytes: bytes | None = None,
+        session_metadata: dict | None = None,
         timeout_seconds: float | None = None,
         memory_limit_mb: int | None = None,
     ) -> CodeExecutionResult:
@@ -257,6 +271,13 @@ class PyodideSandbox:
                         executions. Can be used to persist variables, imports,
                         and definitions across multiple execute() calls. If None,
                         a new session is created.
+            session_bytes: Optional bytes to be used as the initial session state.
+                        This is used to resume code execution from the same session.
+                        You can use this instead of `session_id`.
+                        Note: when using this, you need to provide `session_metadata`.
+            session_metadata: Optional metadata to be used as the initial session state.
+                        This is used to resume code execution from the same session.
+                        Note: when using this, you need to provide `session_bytes`.
             timeout_seconds: Maximum execution time in seconds before the process
                         is terminated. If None, execution may run indefinitely
                         (not recommended for untrusted code).
@@ -298,8 +319,7 @@ class PyodideSandbox:
             cmd.append(f"--v8-flags=--max-old-space-size={memory_limit_mb}")
 
         # Add the path to the JavaScript wrapper script
-        # Developer version
-        cmd.append(PKG_NAME)
+        cmd.append(LOCAL_PKG_PATH if PYODIDE_USE_LOCAL_PACKAGE else PKG_NAME)
 
         # Add script path and code
         cmd.extend(["-c", code])
@@ -307,6 +327,14 @@ class PyodideSandbox:
         # Add session ID if provided
         if session_id:
             cmd.extend(["-s", session_id])
+
+        if session_bytes:
+            # Convert bytes to list of integers and then to JSON string
+            bytes_array = list(session_bytes)
+            cmd.extend(["-b", json.dumps(bytes_array)])
+
+        if session_metadata:
+            cmd.extend(["-m", json.dumps(session_metadata)])
 
         # Ensure the sessions directory exists
         cmd.extend(["-d", self.sessions_dir])
@@ -334,6 +362,12 @@ class PyodideSandbox:
                 stderr = full_result.get("stderr", None)
                 result = full_result.get("result", None)
                 status = "success" if full_result.get("success", False) else "error"
+                session_metadata = full_result.get("sessionMetadata", None)
+                # Convert the Uint8Array to Python bytes
+                session_bytes_array = full_result.get("sessionBytes", None)
+                session_bytes = (
+                    bytes(session_bytes_array) if session_bytes_array else None
+                )
             else:
                 stderr = stderr_bytes.decode("utf-8", errors="replace")
                 status = "error"
@@ -353,4 +387,6 @@ class PyodideSandbox:
             stdout=stdout or None,
             stderr=stderr or None,
             result=result,
+            session_metadata=session_metadata,
+            session_bytes=session_bytes,
         )
