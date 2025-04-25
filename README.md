@@ -120,7 +120,7 @@ agent = create_react_agent(
     checkpointer=InMemorySaver()
 )
 result = await agent.ainvoke(
-    {"messages": [{"role": "user", "content": "what's 5 + 7? save result "}]},
+    {"messages": [{"role": "user", "content": "what's 5 + 7?"}]},
     config={"configurable": {"thread_id": "123"}},
 )
 second_result = await agent.ainvoke(
