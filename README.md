@@ -129,6 +129,11 @@ second_result = await agent.ainvoke(
 )
 ```
 
+See full examples here:
+
+* [ReAct agent](examples/react_agent.py)
+* [CodeAct agent](examples/codeact_agent.py)
+
 ## 🧩 Components
 
 The sandbox consists of two main components:
