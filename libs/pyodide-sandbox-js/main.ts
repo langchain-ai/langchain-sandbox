@@ -102,6 +102,25 @@ def dump_session(path: str) -> None:
     dill.session.dump_session(filename=path)
 
 
+def load_session_bytes(session_bytes: bytes) -> list[str]:
+    """Load the session module."""
+    import dill
+    import io
+
+    buffer = io.BytesIO(session_bytes.to_py())
+    dill.session.load_session(filename=buffer)
+
+
+def dump_session_bytes() -> bytes:
+    """Dump the session module."""
+    import dill
+    import io
+
+    buffer = io.BytesIO()
+    dill.session.dump_session(filename=buffer)
+    return buffer.getvalue()
+
+
 def robust_serialize(obj):
     """Recursively converts an arbitrary Python object into a JSON-serializable structure.
 
@@ -159,6 +178,8 @@ interface PyodideResult {
   stderr?: string[];
   error?: string;
   jsonResult?: string;
+  sessionBytes?: Uint8Array;
+  sessionMetadata?: SessionMetadata;
 }
 
 async function initPyodide(pyodide: any): Promise<void> {
@@ -174,6 +195,8 @@ async function initPyodide(pyodide: any): Promise<void> {
 async function runPython(
   pythonCode: string,
   options: {
+    sessionBytes?: string;
+    sessionMetadata?: string;
     session?: string;
     sessionsDir?: string;
   }
@@ -198,13 +221,29 @@ async function runPython(
 
     // Determine session directory
     const sessionsDir = options.sessionsDir || Deno.cwd();
-    let sessionMetadata: SessionMetadata = {
-      created: new Date().toISOString(),
-      lastModified: new Date().toISOString(),
-      packages: [],
+    let sessionMetadata: SessionMetadata;
+    if (options.sessionMetadata) {
+      sessionMetadata = JSON.parse(options.sessionMetadata);
+    } else {
+      sessionMetadata = {
+        created: new Date().toISOString(),
+        lastModified: new Date().toISOString(),
+        packages: [],
+      };
     };
     let sessionJsonPath: string;
     let isExistingSession = false;
+    let sessionData: Uint8Array | null = null;
+
+    if (options.session && options.sessionBytes) {
+      console.error("Cannot provide both session and sessionBytes options");
+      return { success: false, error: "Cannot provide both session and sessionBytes options" };
+    }
+
+    if (options.sessionBytes && !options.sessionMetadata) {
+      console.error("sessionMetadata is required when providing sessionBytes");
+      return { success: false, error: "sessionMetadata is required when providing sessionBytes" };
+    }
 
     // Handle session if provided
     if (options.session) {
@@ -263,8 +302,7 @@ async function runPython(
 
       // Load PKL file into pyodide if it exists
       try {
-        const sessionData = await Deno.readFile(sessionPklPath);
-        pyodide.FS.writeFile(`/${options.session}.pkl`, sessionData);
+        sessionData = await Deno.readFile(sessionPklPath);
       } catch (error) {
         // File doesn't exist or can't be read, skip loading
       }
@@ -272,11 +310,10 @@ async function runPython(
 
     // Import our prepared environment module
     const prepare_env = pyodide.pyimport("prepare_env");
-    
-    // Prepare additional packages to install (include dill if using sessions)
-    const additionalPackagesToInstall = options.session
+    // Prepare additional packages to install (include dill)
+    const additionalPackagesToInstall = options.session || options.sessionBytes
       ? [...new Set([...sessionMetadata.packages, "dill"])]
-      : [];
+      : ["dill"];
 
     const installedPackages = await prepare_env.install_imports(
       pythonCode,
@@ -286,6 +323,12 @@ async function runPython(
     if (options.session && isExistingSession) {
       // Run session preamble
       await prepare_env.load_session(`/${options.session}.pkl`);
+    }
+
+    if (options.sessionBytes) {
+      sessionData = Uint8Array.from(JSON.parse(options.sessionBytes));
+      // Run session preamble
+      await prepare_env.load_session_bytes(sessionData);
     }
 
     const packages = installedPackages.map((pkg: any) => pkg.get("package"));
@@ -317,13 +360,18 @@ async function runPython(
       const sessionPklPath = join(sessionDirPath, `session.pkl`);
       await Deno.writeFile(sessionPklPath, sessionData);
     }
+
+    // Save session state to sessionBytes
+    sessionData = await prepare_env.dump_session_bytes() as Uint8Array;
     // Return the result with stdout and stderr output
     return { 
       success: true, 
       result: rawValue,
       jsonResult: jsonValue,
       stdout: output,
-      stderr: err_output
+      stderr: err_output,
+      sessionBytes: sessionData,
+      sessionMetadata: sessionMetadata,
     };
   } catch (error: any) {
     return { 
@@ -337,7 +385,7 @@ async function runPython(
 
 async function main(): Promise<void> {
   const flags = parseArgs(Deno.args, {
-    string: ["code", "file", "session", "sessions-dir"],
+    string: ["code", "file", "session", "sessions-dir", "session-bytes", "session-metadata"],
     alias: {
       c: "code",
       f: "file",
@@ -345,6 +393,8 @@ async function main(): Promise<void> {
       d: "sessions-dir",
       h: "help",
       V: "version",
+      b: "session-bytes",
+      m: "session-metadata",
     },
     boolean: ["help", "version"],
     default: { help: false, version: false },
@@ -358,6 +408,7 @@ Run Python code in a sandboxed environment using Pyodide
 OPTIONS:
   -c, --code <code>            Python code to execute
   -f, --file <path>            Path to Python file to execute
+  -b, --session-bytes <bytes>  Session bytes
   -s, --session <string>       Session name
   -d, --sessions-dir <path>    Directory to store session files
   -h, --help                   Display help
@@ -376,6 +427,8 @@ OPTIONS:
     file: flags.file,
     session: flags.session,
     sessionsDir: flags["sessions-dir"],
+    sessionBytes: flags["session-bytes"],
+    sessionMetadata: flags["session-metadata"],
   };
 
   if (!options.code && !options.file) {
@@ -442,6 +495,8 @@ OPTIONS:
   const result = await runPython(pythonCode, {
     session: options.session,
     sessionsDir: options.sessionsDir,
+    sessionBytes: options.sessionBytes,
+    sessionMetadata: options.sessionMetadata,
   });
 
   // Exit with error code if Python execution failed
@@ -451,6 +506,8 @@ OPTIONS:
     stderr: result.success ? (result.stderr.join('') || null) : result.error || null,
     result: result.success ? JSON.parse(result.jsonResult || 'null') : null,
     success: result.success,
+    sessionBytes: result.sessionBytes,
+    sessionMetadata: result.sessionMetadata,
   };
 
   // Output as JSON to stdout
