@@ -83,11 +83,7 @@ class PyodideSandboxTool(BaseTool):
         "- If you need to make web requests, use `httpx.AsyncClient`."
     )
     sandbox: PyodideSandbox = Field(default_factory=_get_default_pyodide_sandbox)
-
-    def __init__(self, **kwargs: dict[str, Any]) -> None:
-        """Initialize the tool with correct args schema."""
-        super().__init__(**kwargs)
-        self.args_schema: type[BaseModel] = PythonInputs
+    args_schema: type[BaseModel] = PythonInputs
 
     def _run(
         self,
