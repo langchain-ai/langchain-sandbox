@@ -225,9 +225,10 @@ async function runPython(
     // Import our prepared environment module
     const prepare_env = pyodide.pyimport("prepare_env");
     // Prepare additional packages to install (include dill)
+    const defaultPackages = options.stateful ? ["dill"] : [];
     const additionalPackagesToInstall = options.sessionBytes
-      ? [...new Set([...sessionMetadata.packages, "dill"])]
-      : ["dill"];
+      ? [...new Set([...defaultPackages, ...sessionMetadata.packages])]
+      : defaultPackages;
 
     const installedPackages = await prepare_env.install_imports(
       pythonCode,
