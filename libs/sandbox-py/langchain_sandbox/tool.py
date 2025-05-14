@@ -25,6 +25,14 @@ def _get_default_pyodide_sandbox() -> PyodideSandbox:
     )
 
 
+class PythonInputs(BaseModel):
+    """Python code to execute in the sandbox."""
+
+    state: Annotated[dict[str, Any] | BaseModel, InjectedState]
+    tool_call_id: Annotated[str, InjectedToolCallId]
+    code: str = Field(description="Code to execute.")
+
+
 class PyodideSandboxTool(BaseTool):
     """Tool for running python code in a PyodideSandbox.
 
@@ -79,14 +87,6 @@ class PyodideSandboxTool(BaseTool):
     def __init__(self, **kwargs: dict[str, Any]) -> None:
         """Initialize the tool with correct args schema."""
         super().__init__(**kwargs)
-
-        class PythonInputs(BaseModel):
-            """Python code to execute in the sandbox."""
-
-            state: Annotated[dict[str, Any] | BaseModel, InjectedState]
-            tool_call_id: Annotated[str, InjectedToolCallId]
-            code: str = Field(description="Code to execute.")
-
         self.args_schema: type[BaseModel] = PythonInputs
 
     def _run(
