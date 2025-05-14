@@ -96,7 +96,7 @@ class PyodideSandboxTool(BaseTool):
         tool_call_id: str,
         config: RunnableConfig,
         run_manager: CallbackManagerForToolRun | None = None,
-    ) -> tuple[str, dict[str, bytes | dict | None]]:
+    ) -> None:
         """Use the tool."""
         error_msg = (
             "Sync invocation of PyodideSandboxTool is not supported - "
@@ -111,7 +111,7 @@ class PyodideSandboxTool(BaseTool):
         tool_call_id: str,
         config: RunnableConfig,
         run_manager: AsyncCallbackManagerForToolRun | None = None,
-    ) -> tuple[str, dict[str, bytes | dict | None]]:
+    ) -> str | Command:
         """Use the tool asynchronously."""
         if isinstance(state, dict):
             session_bytes = state.get("session_bytes")
