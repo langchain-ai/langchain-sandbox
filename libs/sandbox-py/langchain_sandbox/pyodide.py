@@ -93,8 +93,8 @@ class PyodideSandbox:
 
     def __init__(
         self,
-        sessions_dir: str,
         *,
+        stateful: bool = False,
         allow_env: list[str] | bool = False,
         allow_read: list[str] | bool = False,
         allow_write: list[str] | bool = False,
@@ -111,9 +111,11 @@ class PyodideSandbox:
         based on the needs of the code being executed.
 
         Args:
-            sessions_dir: Directory for storing session data. This directory must
-                be writable by the Deno subprocess. It is used to persist session
-                state between executions.
+            stateful: Whether to use a stateful session. If True, `sandbox.execute`
+                will include session metadata and the session bytes containing the
+                session state (variables, imports, etc.) in the execution result.
+                This allows saving and reusing the session state between executions.
+
             allow_env: Environment variable access configuration:
                 - False: No environment access (default, most secure)
                 - True: Unrestricted access to all environment variables
@@ -126,7 +128,7 @@ class PyodideSandbox:
                 - List[str]: Read access restricted to specific paths, e.g.
                   ["/tmp/sandbox", "./data"]
 
-                  By default allows read to node_modules and to sessions dir
+                  By default allows read from node_modules
 
             allow_write: File system write access configuration:
                 - False: No file system write access (default, most secure)
@@ -134,7 +136,7 @@ class PyodideSandbox:
                 - List[str]: Write access restricted to specific paths, e.g.
                   ["/tmp/sandbox/output"]
 
-                  By default allows read to node_modules and to sessions dir
+                  By default allows write to node_modules
 
             allow_net: Network access configuration:
                 - False: No network access (default, most secure)
@@ -158,15 +160,7 @@ class PyodideSandbox:
                 the default directory for Deno modules.
 
         """
-        if "," in sessions_dir:
-            # Very simple check to protect a user against typos.
-            # The goal isn't to be exhaustive on validation here.
-            msg = "Please provide a valid session directory."
-            raise ValueError(msg)
-
-        # Store configuration
-        self.sessions_dir = sessions_dir
-
+        self.stateful = stateful
         # Configure permissions
         self.permissions = []
 
@@ -185,9 +179,9 @@ class PyodideSandbox:
         perm_defs = [
             ("--allow-env", allow_env, None),
             # For file system permissions, if no permission is specified,
-            # force session_dir and node_modules
-            ("--allow-read", allow_read, [sessions_dir, "node_modules"]),
-            ("--allow-write", allow_write, [sessions_dir, "node_modules"]),
+            # force node_modules
+            ("--allow-read", allow_read, ["node_modules"]),
+            ("--allow-write", allow_write, ["node_modules"]),
             ("--allow-net", allow_net, None),
             ("--allow-run", allow_run, None),
             ("--allow-ffi", allow_ffi, None),
@@ -239,7 +233,6 @@ class PyodideSandbox:
         self,
         code: str,
         *,
-        session_id: str | None = None,
         session_bytes: bytes | None = None,
         session_metadata: dict | None = None,
         timeout_seconds: float | None = None,
@@ -267,10 +260,6 @@ class PyodideSandbox:
 
         Args:
             code: The Python code to execute in the sandbox
-            session_id: Optional session identifier for maintaining state between
-                        executions. Can be used to persist variables, imports,
-                        and definitions across multiple execute() calls. If None,
-                        a new session is created.
             session_bytes: Optional bytes to be used as the initial session state.
                         This is used to resume code execution from the same session.
                         You can use this instead of `session_id`.
@@ -324,9 +313,8 @@ class PyodideSandbox:
         # Add script path and code
         cmd.extend(["-c", code])
 
-        # Add session ID if provided
-        if session_id:
-            cmd.extend(["-s", session_id])
+        if self.stateful:
+            cmd.extend(["-s"])
 
         if session_bytes:
             # Convert bytes to list of integers and then to JSON string
@@ -335,9 +323,6 @@ class PyodideSandbox:
 
         if session_metadata:
             cmd.extend(["-m", json.dumps(session_metadata)])
-
-        # Ensure the sessions directory exists
-        cmd.extend(["-d", self.sessions_dir])
 
         # Create and run the subprocess
         process = await asyncio.create_subprocess_exec(
