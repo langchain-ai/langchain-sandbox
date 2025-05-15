@@ -8,7 +8,7 @@ def get_default_sandbox(stateful: bool = False) -> PyodideSandbox:
     return PyodideSandbox(
         stateful=stateful,
         allow_read=True,
-        allow_write=["node_modules"],
+        allow_write=True,
         allow_net=True,
         allow_env=False,
         allow_run=False,

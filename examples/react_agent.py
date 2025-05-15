@@ -2,7 +2,7 @@
 import asyncio
 import uuid
 
-from langchain_sandbox import PyodideSandbox, PyodideSandboxTool
+from langchain_sandbox import PyodideSandbox, PyodideStatefulSandboxTool
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -15,7 +15,7 @@ sandbox = PyodideSandbox(
 )
 
 # Define the sandbox tool
-sandbox_tool = PyodideSandboxTool(sandbox=sandbox)
+sandbox_tool = PyodideStatefulSandboxTool(sandbox=sandbox)
 
 checkpointer = InMemorySaver()
 # Create an agent with the sandbox tool

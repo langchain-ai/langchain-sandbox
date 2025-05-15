@@ -9,7 +9,19 @@ import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
+
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForToolRun,
+    CallbackManagerForToolRun,
+)
+from langchain_core.messages import ToolMessage
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool, InjectedToolCallId
+from langgraph.prebuilt import InjectedState
+from langgraph.types import Command
+from pydantic import BaseModel, Field, field_validator
+
 
 logger = logging.getLogger(__name__)
 
@@ -375,3 +387,209 @@ class PyodideSandbox:
             session_metadata=session_metadata,
             session_bytes=session_bytes,
         )
+
+
+# LangChain tools for running python code in a PyodideSandbox.
+
+class PyodideStatelessSandboxToolInput(BaseModel):
+    """Python code to execute in the sandbox."""
+
+    code: str = Field(description="Code to execute.")
+
+
+class PyodideStatelessSandboxTool(BaseTool):
+    """Tool for running python code in a PyodideSandbox.
+
+    ```python
+    from langgraph.prebuilt import create_react_agent
+    from langchain_sandbox import PyodideStatelessSandboxTool, PyodideSandbox
+
+    sandbox = PyodideSandbox(allow_net=True)
+    tool = PyodideStatelessSandboxTool(sandbox=sandbox)
+    agent = create_react_agent(
+        "anthropic:claude-3-7-sonnet-latest",
+        tools=[tool],
+    )
+    result = await agent.ainvoke(
+        {"messages": [{"role": "user", "content": "what's 5 + 7?"}]},
+    )
+    ```
+    """
+
+    name: str = "python_code_sandbox"
+    description: str = (
+        "A secure Python code sandbox. Use this to execute python commands.\n"
+        "- Input should be a valid python command.\n"
+        "- To return output, you should print it out with `print(...)`.\n"
+        "- Don't use f-strings when printing outputs.\n"
+        "- If you need to make web requests, use `httpx.AsyncClient`."
+    )
+    sandbox: PyodideSandbox
+    args_schema: type[BaseModel] = PyodideStatelessSandboxToolInput
+
+    def _run(
+        self,
+        code: str,
+        state: dict[str, Any] | BaseModel,
+        tool_call_id: str,
+        config: RunnableConfig,
+        run_manager: CallbackManagerForToolRun | None = None,
+    ) -> None:
+        """Use the tool."""
+        error_msg = (
+            "Sync invocation of PyoidideStatefulSandboxTool is not supported - "
+            "please invoke the tool asynchronously using `await tool.ainvoke()`"
+        )
+        raise NotImplementedError(error_msg)
+
+    async def _arun(
+        self,
+        code: str,
+        config: RunnableConfig,
+        run_manager: AsyncCallbackManagerForToolRun | None = None,
+    ) -> str | Command:
+        """Use the tool asynchronously."""
+        result = await self.sandbox.execute(code)
+        if result.stderr:
+            return f"Error during execution: {result.stderr}"
+
+        return result.stdout
+
+
+class PyodideStatefulSandboxToolInput(BaseModel):
+    """Python code to execute in the sandbox."""
+
+    code: str = Field(description="Code to execute.")
+    # these fields will be ignored by the LLM
+    # and automatically injected by LangGraph's ToolNode
+    state: Annotated[dict[str, Any] | BaseModel, InjectedState]
+    tool_call_id: Annotated[str, InjectedToolCallId]
+
+
+class PyodideStatefulSandboxTool(BaseTool):
+    """Tool for running python code in a PyodideSandbox with session data persisted.
+
+    !!! important
+        This tool can only be used inside a LangGraph graph with a checkpointer, and
+        has to be used with the prebuilt `create_react_agent` or `ToolNode`
+
+    The state between code executions (to variables, imports,
+    and definitions, etc.), will be persisted using LangGraph checkpointer.
+
+    ```python
+    from langgraph.prebuilt import create_react_agent
+    from langgraph.prebuilt.chat_agent_executor import AgentState
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langchain_sandbox import PyodideStatefulSandboxTool, PyodideSandbox
+
+    class State(AgentState):
+        session_bytes: bytes
+        session_metadata: dict
+
+    sandbox = PyodideSandbox(stateful=True, allow_net=True)
+    tool = PyodideStatefulSandboxTool(sandbox=sandbox)
+    agent = create_react_agent(
+        "anthropic:claude-3-7-sonnet-latest",
+        tools=[tool],
+        checkpointer=InMemorySaver(),
+        state_schema=State
+    )
+    result = await agent.ainvoke(
+        {
+            "messages": [{"role": "user", "content": "what's 5 + 7? save result as 'a'"}],
+            "session_bytes": None,
+            "session_metadata": None
+        },
+        config={"configurable": {"thread_id": "123"}},
+    )
+    second_result = await agent.ainvoke(
+        {"messages": [{"role": "user", "content": "what's the sine of 'a'?"}]},
+        config={"configurable": {"thread_id": "123"}},
+    )
+    ```
+    """
+
+    name: str = "python_code_sandbox"
+    description: str = (
+        "A secure Python code sandbox. Use this to execute python commands.\n"
+        "- Input should be a valid python command.\n"
+        "- To return output, you should print it out with `print(...)`.\n"
+        "- Don't use f-strings when printing outputs.\n"
+        "- If you need to make web requests, use `httpx.AsyncClient`."
+    )
+    sandbox: PyodideSandbox
+    args_schema: type[BaseModel] = PyodideStatefulSandboxToolInput
+
+    @field_validator("sandbox")
+    @classmethod
+    def validate_sandbox_stateful(cls, v: PyodideSandbox) -> PyodideSandbox:
+        """Validate that the sandbox is stateful."""
+        if not v.stateful:
+            error_msg = "PyodideStatefulSandboxTool requires a stateful sandbox"
+            raise ValueError(error_msg)
+        return v
+
+    def _run(
+        self,
+        code: str,
+        state: dict[str, Any] | BaseModel,
+        tool_call_id: str,
+        config: RunnableConfig,
+        run_manager: CallbackManagerForToolRun | None = None,
+    ) -> None:
+        """Use the tool."""
+        error_msg = (
+            "Sync invocation of PyoidideStatefulSandboxTool is not supported - "
+            "please invoke the tool asynchronously using `await tool.ainvoke()`"
+        )
+        raise NotImplementedError(error_msg)
+
+    async def _arun(
+        self,
+        code: str,
+        state: dict[str, Any] | BaseModel,
+        tool_call_id: str,
+        config: RunnableConfig,
+        run_manager: AsyncCallbackManagerForToolRun | None = None,
+    ) -> str | Command:
+        """Use the tool asynchronously."""
+        required_keys = {"session_bytes", "session_metadata", "messages"}
+        actual_keys = set(state) if isinstance(state, dict) else set(state.__dict__)
+        if missing_keys := required_keys - actual_keys:
+            error_msg = (
+                "Input state is missing the following required keys: "
+                f"{missing_keys}"
+            )
+            raise ValueError(error_msg)
+
+        if isinstance(state, dict):
+            session_bytes = state["session_bytes"]
+            session_metadata = state["session_metadata"]
+        else:
+            session_bytes = state.session_bytes
+            session_metadata = state.session_metadata
+
+        result = await self.sandbox.execute(
+            code, session_bytes=session_bytes, session_metadata=session_metadata
+        )
+
+        if result.stderr:
+            tool_result = f"Error during execution: {result.stderr}"
+        else:
+            tool_result = result.stdout
+
+        if self.sandbox.stateful:
+            return Command(
+                update={
+                    "session_bytes": result.session_bytes,
+                    "session_metadata": result.session_metadata,
+                    "messages": [
+                        ToolMessage(
+                            content=tool_result,
+                            tool_call_id=tool_call_id,
+                        )
+                    ],
+                }
+            )
+
+        return tool_result

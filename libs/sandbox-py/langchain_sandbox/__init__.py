@@ -1,9 +1,9 @@
 """LangChain code sandbox."""
 
-from langchain_sandbox.pyodide import PyodideSandbox
-from langchain_sandbox.tool import PyodideSandboxTool
+from langchain_sandbox.pyodide import PyodideSandbox, PyodideStatefulSandboxTool, PyodideStatelessSandboxTool
 
 __all__ = [
     "PyodideSandbox",
-    "PyodideSandboxTool",
+    "PyodideStatefulSandboxTool",
+    "PyodideStatelessSandboxTool",
 ]
