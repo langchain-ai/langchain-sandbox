@@ -1,18 +1,15 @@
 # pip install langgraph "langchain[anthropic]"
 import asyncio
 
-from langchain_sandbox import PyodideSandbox, PyodideStatelessSandboxTool
+from langchain_sandbox import PyodideSandboxTool
 from langgraph.prebuilt import create_react_agent
 
-# Create a sandbox instance
-sandbox = PyodideSandbox(
+# Define the sandbox tool
+sandbox_tool = PyodideSandboxTool(
     # Allow Pyodide to install python packages that
     # might be required.
     allow_net=True,
 )
-
-# Define the sandbox tool
-sandbox_tool = PyodideStatelessSandboxTool(sandbox=sandbox)
 
 # Create an agent with the sandbox tool
 agent = create_react_agent(

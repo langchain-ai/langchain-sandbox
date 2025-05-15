@@ -39,10 +39,9 @@ from langchain_sandbox import PyodideSandbox
 
 # Create a sandbox instance
 sandbox = PyodideSandbox(
-   "./sessions", # Directory to store session files
-   # Allow Pyodide to install python packages that
-   # might be required.
-   allow_net=True,
+    # Allow Pyodide to install python packages that
+    # might be required.
+    allow_net=True,
 )
 code = """\
 import numpy as np
@@ -51,18 +50,47 @@ print(x)
 """
 
 # Execute Python code
-print(await sandbox.execute(code, session_id="123"))
+print(await sandbox.execute(code))
 
 # CodeExecutionResult(
 #   result=None, 
 #   stdout='[1 2 3]', 
 #   stderr=None, 
 #   status='success', 
-#   execution_time=2.8578367233276367
+#   execution_time=2.8578367233276367,
+#   session_metadata={'created': '2025-05-15T21:26:37.204Z', 'lastModified': '2025-05-15T21:26:37.831Z', 'packages': ['numpy']},
+#   session_bytes=None
 # )
+```
 
-# Can still access a previous result!
-print(await sandbox.execute("float(x[0])", session_id="123"))
+### Stateful Sandbox
+
+If you want to persist state between code executions (to persist variables, imports,
+and definitions, etc.), you can set `stateful=True` in the sandbox. This will return
+`session_bytes` and `session_metadata` that you can pass to `.execute()`.
+
+> [!warning]
+> `session_bytes` contains pickled session state. It should not be unpickled
+> and is only meant to be used by the sandbox itself
+
+```python
+sandbox = PyodideSandbox(
+    # Create stateful sandbox
+    stateful=True,
+    # Allow Pyodide to install python packages that
+    # might be required.
+    allow_net=True,
+)
+code = """\
+import numpy as np
+x = np.array([1, 2, 3])
+print(x)
+"""
+
+result = await sandbox.execute(code)
+
+# Pass previous result
+print(await sandbox.execute("float(x[0])", session_bytes=result.session_bytes, session_metadata=result.session_metadata))
 
 #  CodeExecutionResult(
 #     result=1, 
@@ -70,6 +98,8 @@ print(await sandbox.execute("float(x[0])", session_id="123"))
 #     stderr=None, 
 #     status='success', 
 #     execution_time=2.7027177810668945
+#     session_metadata={'created': '2025-05-15T21:27:57.120Z', 'lastModified': '2025-05-15T21:28:00.061Z', 'packages': ['numpy', 'dill']},
+#     session_bytes=b'\x80\x04\x95d\x01\x00..."
 # )
 ```
 
@@ -90,10 +120,13 @@ You can use sandbox tools inside a LangGraph agent:
 
 ```python
 from langgraph.prebuilt import create_react_agent
-from langchain_sandbox import PyodideStatelessSandboxTool, PyodideSandbox
+from langchain_sandbox import PyodideSandboxTool
 
-sandbox = PyodideSandbox(allow_net=True)
-tool = PyodideStatelessSandboxTool(sandbox=sandbox)
+tool = PyodideSandboxTool(
+    # Allow Pyodide to install python packages that
+    # might be required.
+    allow_net=True
+)
 agent = create_react_agent(
     "anthropic:claude-3-7-sonnet-latest",
     tools=[tool],
@@ -103,23 +136,35 @@ result = await agent.ainvoke(
 )
 ```
 
+#### Stateful Tool
+
+> [!important]
+> **Stateful** `PyodideSandboxTool` works only in LangGraph agents that use the prebuilt [`create_react_agent`](https://langchain-ai.github.io/langgraph/reference/agents/#langgraph.prebuilt.chat_agent_executor.create_react_agent) or [`ToolNode`](https://langchain-ai.github.io/langgraph/reference/agents/#langgraph.prebuilt.tool_node.ToolNode).
+
 If you want to persist state between code executions (to persist variables, imports,
-and definitions, etc.), you need to use `PyodideStatefulSandboxTool`:
+and definitions, etc.), you need to set `stateful=True`:
 
 ```python
 from langgraph.prebuilt import create_react_agent
 from langgraph.prebuilt.chat_agent_executor import AgentState
 from langgraph.checkpoint.memory import InMemorySaver
-from langchain_sandbox import PyodideStatefulSandboxTool, PyodideSandbox
+from langchain_sandbox import PyodideSandboxTool, PyodideSandbox
 
-# important: add session_bytes & session_metadata keys to your graph state schema - 
-# these keys are required to store the session data between tool invocations
 class State(AgentState):
+    # important: add session_bytes & session_metadata keys to your graph state schema - 
+    # these keys are required to store the session data between tool invocations.
+    # `session_bytes` contains pickled session state. It should not be unpickled
+    # and is only meant to be used by the sandbox itself
     session_bytes: bytes
     session_metadata: dict
 
-sandbox = PyodideSandbox(stateful=True, allow_net=True)
-tool = PyodideStatefulSandboxTool(sandbox=sandbox)
+tool = PyodideSandboxTool(
+    # Create stateful sandbox
+    stateful=True,
+    # Allow Pyodide to install python packages that
+    # might be required.
+    allow_net=True
+)
 agent = create_react_agent(
     "anthropic:claude-3-7-sonnet-latest",
     tools=[tool],
@@ -128,7 +173,9 @@ agent = create_react_agent(
 )
 result = await agent.ainvoke(
     {
-        "messages": [{"role": "user", "content": "what's 5 + 7? save result as 'a'"}],
+        "messages": [
+            {"role": "user", "content": "what's 5 + 7? save result as 'a'"}
+        ],
         "session_bytes": None,
         "session_metadata": None
     },
@@ -140,8 +187,7 @@ second_result = await agent.ainvoke(
 )
 ```
 
-> [!important]
-> `PyodideStatefulSandboxTool` works only in LangGraph agents that use the prebuilt [`create_react_agent`](https://langchain-ai.github.io/langgraph/reference/agents/#langgraph.prebuilt.chat_agent_executor.create_react_agent) or [`ToolNode`](https://langchain-ai.github.io/langgraph/reference/agents/#langgraph.prebuilt.tool_node.ToolNode).
+
 
 See full examples here:
 

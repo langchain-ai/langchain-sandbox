@@ -2,9 +2,18 @@
 
 from pathlib import Path
 
+import pytest
+
 from langchain_sandbox import PyodideSandbox
 
 current_dir = Path(__file__).parent
+
+
+@pytest.fixture
+def pyodide_package(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Patch PKG_NAME to point to a local deno typescript file."""
+    local_script = str(current_dir / "../../../pyodide-sandbox-js/main.ts")
+    monkeypatch.setattr("langchain_sandbox.pyodide.PKG_NAME", local_script)
 
 
 def get_default_sandbox(stateful: bool = False) -> PyodideSandbox:
@@ -17,11 +26,10 @@ def get_default_sandbox(stateful: bool = False) -> PyodideSandbox:
         allow_env=False,
         allow_run=False,
         allow_ffi=False,
-        pyodide_package=str(current_dir / "../../../pyodide-sandbox-js/main.ts"),
     )
 
 
-async def test_stdout_sessionless() -> None:
+async def test_stdout_sessionless(pyodide_package: None) -> None:
     """Test without a session ID."""
     sandbox = get_default_sandbox()
     # Execute a simple piece of code synchronously
@@ -33,7 +41,7 @@ async def test_stdout_sessionless() -> None:
     assert result.session_bytes is None
 
 
-async def test_session_state_persistence_basic() -> None:
+async def test_session_state_persistence_basic(pyodide_package: None) -> None:
     """Simple test to verify that a session ID is used to persist state.
 
     We'll assign a variable in one execution and check if it's available in the next.
@@ -56,7 +64,7 @@ async def test_session_state_persistence_basic() -> None:
     assert result1.result is None
 
 
-async def test_pyodide_sandbox_error_handling() -> None:
+async def test_pyodide_sandbox_error_handling(pyodide_package: None) -> None:
     """Test PyodideSandbox error handling."""
     sandbox = get_default_sandbox()
 
@@ -71,7 +79,7 @@ async def test_pyodide_sandbox_error_handling() -> None:
     assert "NameError" in result.stderr
 
 
-async def test_pyodide_sandbox_timeout() -> None:
+async def test_pyodide_sandbox_timeout(pyodide_package: None) -> None:
     """Test PyodideSandbox timeout handling."""
     sandbox = get_default_sandbox()
 
