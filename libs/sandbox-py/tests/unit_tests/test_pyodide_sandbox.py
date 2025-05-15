@@ -1,6 +1,10 @@
 """Test pyodide sandbox functionality."""
 
+from pathlib import Path
+
 from langchain_sandbox import PyodideSandbox
+
+current_dir = Path(__file__).parent
 
 
 def get_default_sandbox(stateful: bool = False) -> PyodideSandbox:
@@ -13,6 +17,7 @@ def get_default_sandbox(stateful: bool = False) -> PyodideSandbox:
         allow_env=False,
         allow_run=False,
         allow_ffi=False,
+        pyodide_package=str(current_dir / "../../../pyodide-sandbox-js/main.ts"),
     )
 
 

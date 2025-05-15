@@ -4,11 +4,8 @@ import asyncio
 import dataclasses
 import json
 import logging
-import os
-import re
 import subprocess
 import time
-from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from langchain_core.callbacks import (
@@ -22,13 +19,10 @@ from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 from pydantic import BaseModel, Field, field_validator
 
-
 logger = logging.getLogger(__name__)
 
 
 Status = Literal["success", "error"]
-
-current_dir = Path(__file__).parent
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -46,11 +40,6 @@ class CodeExecutionResult:
 
 # Published package name
 PKG_NAME = "jsr:@eyurtsev/test-sandbox@0.0.7"
-LOCAL_PKG_PATH = str(current_dir / "../../pyodide-sandbox-js/main.ts")
-# Use published package or local path based on environment variable
-PYODIDE_USE_LOCAL_PACKAGE = (
-    os.environ.get("PYODIDE_USE_LOCAL_PACKAGE", "").lower() == "true"
-)
 
 
 def build_permission_flag(
@@ -114,6 +103,7 @@ class PyodideSandbox:
         allow_run: list[str] | bool = False,
         allow_ffi: list[str] | bool = False,
         node_modules_dir: str = "auto",
+        pyodide_package: str = PKG_NAME,
     ) -> None:
         """Initialize the executor with specific Deno permissions.
 
@@ -171,6 +161,8 @@ class PyodideSandbox:
             node_modules_dir: Directory for Node.js modules. Set to "auto" to use
                 the default directory for Deno modules.
 
+            pyodide_package: The package to use for Pyodide or a path to executable.
+                Defaults to the published package.
         """
         self.stateful = stateful
         # Configure permissions
@@ -210,36 +202,7 @@ class PyodideSandbox:
 
         self.permissions.append(f"--node-modules-dir={node_modules_dir}")
 
-        # Regular expression for validating session IDs
-        self.session_id_pattern = re.compile(r"^[a-zA-Z0-9\-_]+$")
-
-    def _validate_session_id(self, session_id: str | None) -> str | None:
-        """Validate the session ID against the allowed pattern.
-
-        Args:
-            session_id: The session ID to validate
-
-        Returns:
-            The session ID if valid, None otherwise
-
-        Raises:
-            ValueError: If the session ID contains invalid characters
-
-        """
-        if session_id is None:
-            return None
-
-        if not self.session_id_pattern.match(session_id):
-            msg = (
-                f"Invalid session ID: {session_id}. "
-                "Session IDs must contain only alphanumeric characters, "
-                "hyphens, and underscores."
-            )
-            raise ValueError(
-                msg,
-            )
-
-        return session_id
+        self.pyodide_package = pyodide_package
 
     async def execute(
         self,
@@ -320,7 +283,7 @@ class PyodideSandbox:
             cmd.append(f"--v8-flags=--max-old-space-size={memory_limit_mb}")
 
         # Add the path to the JavaScript wrapper script
-        cmd.append(LOCAL_PKG_PATH if PYODIDE_USE_LOCAL_PACKAGE else PKG_NAME)
+        cmd.append(self.pyodide_package)
 
         # Add script path and code
         cmd.extend(["-c", code])
@@ -390,6 +353,7 @@ class PyodideSandbox:
 
 
 # LangChain tools for running python code in a PyodideSandbox.
+
 
 class PyodideStatelessSandboxToolInput(BaseModel):
     """Python code to execute in the sandbox."""
@@ -496,7 +460,9 @@ class PyodideStatefulSandboxTool(BaseTool):
     )
     result = await agent.ainvoke(
         {
-            "messages": [{"role": "user", "content": "what's 5 + 7? save result as 'a'"}],
+            "messages": [
+                {"role": "user", "content": "what's 5 + 7? save result as 'a'"}
+            ],
             "session_bytes": None,
             "session_metadata": None
         },
@@ -557,8 +523,7 @@ class PyodideStatefulSandboxTool(BaseTool):
         actual_keys = set(state) if isinstance(state, dict) else set(state.__dict__)
         if missing_keys := required_keys - actual_keys:
             error_msg = (
-                "Input state is missing the following required keys: "
-                f"{missing_keys}"
+                f"Input state is missing the following required keys: {missing_keys}"
             )
             raise ValueError(error_msg)
 
