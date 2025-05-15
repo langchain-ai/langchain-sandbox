@@ -11,7 +11,7 @@ all: help
 TEST_FILE ?= tests/unit_tests
 
 test:
-	uv run pytest --disable-socket --allow-unix-socket $(TEST_FILE) -vv
+	PYODIDE_USE_LOCAL_PACKAGE=true uv run pytest --disable-socket --allow-unix-socket $(TEST_FILE) -vv
 
 test_watch:
 	uv run ptw . -- $(TEST_FILE)
