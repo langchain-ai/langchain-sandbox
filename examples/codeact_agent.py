@@ -6,24 +6,13 @@ from typing import Any
 
 from langchain.chat_models import init_chat_model
 from langchain_sandbox import PyodideSandbox
-from langgraph.checkpoint.memory import MemorySaver
 
 from langgraph_codeact import EvalCoroutine, create_codeact
 
 
-def create_pyodide_eval_fn(
-    sandbox_dir: str = "./sessions", session_id: str | None = None
-) -> EvalCoroutine:
+def create_pyodide_eval_fn(sandbox: PyodideSandbox) -> EvalCoroutine:
     """Create an eval_fn that uses PyodideSandbox.
-
-    Args:
-        sandbox_dir: Directory to store session files
-        session_id: ID of the session to use
-
-    Returns:
-        A function that evaluates code using PyodideSandbox
     """
-    sandbox = PyodideSandbox(sandbox_dir, allow_net=True)
 
     async def async_eval_fn(
         code: str, _locals: dict[str, Any]
@@ -54,7 +43,6 @@ execute()
             # Execute the code and get the result
             response = await sandbox.execute(
                 code=context_setup + "\n\n" + wrapper_code,
-                session_id=session_id,
             )
 
             # Check if execution was successful
@@ -162,20 +150,19 @@ tools = [
 
 model = init_chat_model("claude-3-7-sonnet-latest", model_provider="anthropic")
 
-eval_fn = create_pyodide_eval_fn()
+sandbox = PyodideSandbox(allow_net=True)
+eval_fn = create_pyodide_eval_fn(sandbox)
 code_act = create_codeact(model, tools, eval_fn)
-agent = code_act.compile(checkpointer=MemorySaver())
+agent = code_act.compile()
 
 query = """A batter hits a baseball at 45.847 m/s at an angle of 23.474° above the horizontal. The outfielder, who starts facing the batter, picks up the baseball as it lands, then throws it back towards the batter at 24.12 m/s at an angle of 39.12 degrees. How far is the baseball from where the batter originally hit it? Assume zero air resistance."""
 
 
-async def run_agent(query: str, thread_id: str):
-    config = {"configurable": {"thread_id": thread_id}}
+async def run_agent(query: str):
     # Stream agent outputs
     async for typ, chunk in agent.astream(
         {"messages": query},
         stream_mode=["values", "messages"],
-        config=config,
     ):
         if typ == "messages":
             print(chunk[0].content, end="")
@@ -185,4 +172,4 @@ async def run_agent(query: str, thread_id: str):
 
 if __name__ == "__main__":
     # Run the agent
-    asyncio.run(run_agent(query, str(uuid.uuid4())))
+    asyncio.run(run_agent(query))

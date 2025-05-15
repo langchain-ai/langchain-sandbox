@@ -78,56 +78,70 @@ print(await sandbox.execute("float(x[0])", session_id="123"))
 You can use `PyodideSandbox` as a LangChain tool:
 
 ```python
-from langchain_sandbox import PyodideSandboxTool
+from langchain_sandbox import PyodideStatelessSandboxTool
 
-tool = PyodideSandboxTool()
+tool = PyodideStatelessSandboxTool()
 result = await tool.ainvoke("print('Hello, world!')")
-```
-
-If you want to persist state between code executions (to persist variables, imports,
-and definitions, etc.), you need to invoke the tool with `thread_id` in the config:
-
-```python
-code = """\
-import numpy as np
-x = np.array([1, 2, 3])
-print(x)
-"""
-result = await tool.ainvoke(
-    code,
-    config={"configurable": {"thread_id": "123"}},
-)
-
-second_result = await tool.ainvoke(
-    "print(float(x[0]))",  # tool is aware of the previous result
-    config={"configurable": {"thread_id": "123"}},
-)
 ```
 
 ### Using with an agent
 
-You can use `PyodideSandboxTool` inside a LangGraph agent. If you are using this tool inside an agent, you can invoke the agent with a config, and it will automatically be passed to the tool:
+You can use sandbox tools inside a LangGraph agent:
 
 ```python
 from langgraph.prebuilt import create_react_agent
-from langgraph.checkpoint.memory import InMemorySaver
-from langchain_sandbox import PyodideSandboxTool
+from langchain_sandbox import PyodideStatelessSandboxTool, PyodideSandbox
 
-tool = PyodideSandboxTool()
+sandbox = PyodideSandbox(allow_net=True)
+tool = PyodideStatelessSandboxTool(sandbox=sandbox)
 agent = create_react_agent(
     "anthropic:claude-3-7-sonnet-latest",
     tools=[tool],
-    checkpointer=InMemorySaver()
 )
 result = await agent.ainvoke(
     {"messages": [{"role": "user", "content": "what's 5 + 7?"}]},
+)
+```
+
+If you want to persist state between code executions (to persist variables, imports,
+and definitions, etc.), you need to use `PyodideStatefulSandboxTool`:
+
+```python
+from langgraph.prebuilt import create_react_agent
+from langgraph.prebuilt.chat_agent_executor import AgentState
+from langgraph.checkpoint.memory import InMemorySaver
+from langchain_sandbox import PyodideStatefulSandboxTool, PyodideSandbox
+
+# important: add session_bytes & session_metadata keys to your graph state schema - 
+# these keys are required to store the session data between tool invocations
+class State(AgentState):
+    session_bytes: bytes
+    session_metadata: dict
+
+sandbox = PyodideSandbox(stateful=True, allow_net=True)
+tool = PyodideStatefulSandboxTool(sandbox=sandbox)
+agent = create_react_agent(
+    "anthropic:claude-3-7-sonnet-latest",
+    tools=[tool],
+    checkpointer=InMemorySaver(),
+    state_schema=State
+)
+result = await agent.ainvoke(
+    {
+        "messages": [{"role": "user", "content": "what's 5 + 7? save result as 'a'"}],
+        "session_bytes": None,
+        "session_metadata": None
+    },
     config={"configurable": {"thread_id": "123"}},
 )
 second_result = await agent.ainvoke(
-    {"messages": [{"role": "user", "content": "what's the sine of that?"}]},
+    {"messages": [{"role": "user", "content": "what's the sine of 'a'?"}]},
     config={"configurable": {"thread_id": "123"}},
 )
 ```
+
+> [!important]
+> `PyodideStatefulSandboxTool` works only in LangGraph agents that use the prebuilt [`create_react_agent`](https://langchain-ai.github.io/langgraph/reference/agents/#langgraph.prebuilt.chat_agent_executor.create_react_agent) or [`ToolNode`](https://langchain-ai.github.io/langgraph/reference/agents/#langgraph.prebuilt.tool_node.ToolNode).
 
 See full examples here:
 
