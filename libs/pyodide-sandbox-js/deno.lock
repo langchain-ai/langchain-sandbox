@@ -8,7 +8,7 @@
     "jsr:@std/path@^1.0.8": "1.0.8",
     "npm:@types/node@^22.14.0": "22.14.1",
     "npm:commander@^13.1.0": "13.1.0",
-    "npm:pyodide@~0.27.4": "0.27.5",
+    "npm:pyodide@~0.28.0-alpha.2": "0.28.0-alpha.2",
     "npm:test-pyodide-sandbox@^0.0.4": "0.0.4",
     "npm:typescript@^5.8.3": "5.8.3"
   },
@@ -39,8 +39,8 @@
     "commander@13.1.0": {
       "integrity": "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="
     },
-    "pyodide@0.27.5": {
-      "integrity": "sha512-nXErpLzEdtQolt+sNQ/5mKuN9XTUwhxR2MRhRhZ6oDRGpYLXrOp5+kkTPGEwK+wn1ZA8+poNmoxKTj2sq/p9og==",
+    "pyodide@0.28.0-alpha.2": {
+      "integrity": "sha512-QnHsuSDuJMT3cvRtYuCA/LQiGpJm4Lb2ZyZWdfia1BMHU3YOhDRh9qGOnYC7Vi7usy+BuRVk2bSqW1cBk1sATw==",
       "dependencies": [
         "ws"
       ]
@@ -156,7 +156,7 @@
       "dependencies": [
         "npm:@types/node@^22.14.0",
         "npm:commander@^13.1.0",
-        "npm:pyodide@~0.27.4",
+        "npm:pyodide@~0.28.0-alpha.2",
         "npm:test-pyodide-sandbox@^0.0.4",
         "npm:typescript@^5.8.3"
       ]
