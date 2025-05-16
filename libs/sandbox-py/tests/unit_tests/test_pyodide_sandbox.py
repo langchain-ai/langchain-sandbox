@@ -13,7 +13,7 @@ current_dir = Path(__file__).parent
 @pytest.fixture
 def pyodide_package(monkeypatch: pytest.MonkeyPatch) -> None:
     """Patch PKG_NAME to point to a local deno typescript file."""
-    if os.environ.get("RUN_INTEGRATION").lower() == "true":
+    if os.environ.get("RUN_INTEGRATION", "").lower() == "true":
         # Skip this test if running in integration mode
         return
     local_script = str(current_dir / "../../../pyodide-sandbox-js/main.ts")
