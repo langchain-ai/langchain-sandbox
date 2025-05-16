@@ -1,21 +1,21 @@
 {
-  "name": "test-pyodide-sandbox",
-  "version": "0.0.1",
+  "name": "pyodide-sandbox",
+  "version": "0.0.7",
   "description": "CLI for running sandboxed Python code using Pyodide",
   "files": [
-    "README.md"
+    "README.md",
+    "main.ts"
   ],
   "keywords": [
     "python",
     "pyodide",
-    "sandbox"
+    "sandbox",
+    "deno"
   ],
-  "author": "",
-  "license": "ISC",
+  "author": "LangChain",
+  "license": "MIT",
   "dependencies": {
-    "commander": "^13.1.0",
-    "pyodide": "^0.27.4",
-    "test-pyodide-sandbox": "^0.0.4"
+    "pyodide": "^0.27.4"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

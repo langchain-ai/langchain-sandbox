@@ -352,7 +352,7 @@ OPTIONS:
     }
   } else {
     // Process code from command line (replacing escaped newlines)
-    pythonCode = options.code.replace(/\\n/g, "\n");
+    pythonCode = options.code?.replace(/\\n/g, "\n") ?? "";
   }
 
   const result = await runPython(pythonCode, {
@@ -364,8 +364,8 @@ OPTIONS:
   // Exit with error code if Python execution failed
   // Create output JSON with stdout, stderr, and result
   const outputJson = {
-    stdout: result.success ? (result.stdout.join('') || null) : null,
-    stderr: result.success ? (result.stderr.join('') || null) : result.error || null,
+    stdout: result.success ? (result.stdout?.join('') || null) : null,
+    stderr: result.success ? (result.stderr?.join('') || null) : result.error || null,
     result: result.success ? JSON.parse(result.jsonResult || 'null') : null,
     success: result.success,
     sessionBytes: result.sessionBytes,

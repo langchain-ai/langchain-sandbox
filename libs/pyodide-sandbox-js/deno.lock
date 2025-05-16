@@ -7,9 +7,7 @@
     "jsr:@std/internal@^1.0.6": "1.0.6",
     "jsr:@std/path@^1.0.8": "1.0.8",
     "npm:@types/node@^22.14.0": "22.14.1",
-    "npm:commander@^13.1.0": "13.1.0",
     "npm:pyodide@~0.27.4": "0.27.5",
-    "npm:test-pyodide-sandbox@^0.0.4": "0.0.4",
     "npm:typescript@^5.8.3": "5.8.3"
   },
   "jsr": {
@@ -36,20 +34,10 @@
         "undici-types"
       ]
     },
-    "commander@13.1.0": {
-      "integrity": "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="
-    },
     "pyodide@0.27.5": {
       "integrity": "sha512-nXErpLzEdtQolt+sNQ/5mKuN9XTUwhxR2MRhRhZ6oDRGpYLXrOp5+kkTPGEwK+wn1ZA8+poNmoxKTj2sq/p9og==",
       "dependencies": [
         "ws"
-      ]
-    },
-    "test-pyodide-sandbox@0.0.4": {
-      "integrity": "sha512-vyqxAJe+tMYGLztsI7/pOARUzFOsgLs6bYxahgiBf0bxNPtHTU2cUlbGrTEIc33OImamJt4oc5xfsye+ORWI7w==",
-      "dependencies": [
-        "commander",
-        "pyodide"
       ]
     },
     "typescript@5.8.3": {
@@ -155,9 +143,7 @@
     "packageJson": {
       "dependencies": [
         "npm:@types/node@^22.14.0",
-        "npm:commander@^13.1.0",
         "npm:pyodide@~0.27.4",
-        "npm:test-pyodide-sandbox@^0.0.4",
         "npm:typescript@^5.8.3"
       ]
     }
