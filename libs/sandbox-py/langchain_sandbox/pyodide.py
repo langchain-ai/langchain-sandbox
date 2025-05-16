@@ -37,7 +37,7 @@ class CodeExecutionResult:
 
 
 # Published package name
-PKG_NAME = "jsr:@eyurtsev/pyodide-sandbox@0.0.2"
+PKG_NAME = "jsr:@eyurtsev/pyodide-sandbox@0.0.3"
 
 
 def build_permission_flag(
