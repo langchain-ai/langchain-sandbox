@@ -13,6 +13,9 @@ TEST_FILE ?= tests/unit_tests
 test:
 	uv run pytest --disable-socket --allow-unix-socket $(TEST_FILE) -vv
 
+test_integration:
+	RUN_INTEGRATION=true uv run pytest --disable-socket --allow-unix-socket $(TEST_FILE) -vv
+
 test_watch:
 	uv run ptw . -- $(TEST_FILE)
 
