@@ -13,7 +13,7 @@ import datetime
 import importlib
 import json
 import sys
-from typing import Union, TypedDict, List, Any
+from typing import Union, TypedDict, List, Any, Callable, Literal
 
 try:
     from pyodide.code import find_imports  # noqa
@@ -61,6 +61,15 @@ def find_imports_to_install(imports: list[str]) -> list[InstallEntry]:
 async def install_imports(
     source_code_or_imports: Union[str, list[str]],
     additional_packages: list[str] = [],
+    message_callback: Callable[
+          [
+              Literal[
+                "failed",
+              ],
+              Union[InstallEntry, list[InstallEntry]],
+          ],
+          None,
+      ] = lambda event_type, data: None,
 ) -> List[InstallEntry]:
     if isinstance(source_code_or_imports, str):
         try:
@@ -84,7 +93,11 @@ async def install_imports(
             import micropip  # noqa
 
         for entry in to_install:
-            await micropip.install(entry["package"])
+            try:
+              print(await micropip.install(entry["package"]))
+            except Exception as e:
+              message_callback("failed", entry["package"])
+              break # Fail fast
     return to_install
 
 
@@ -230,10 +243,30 @@ async function runPython(
       ? [...new Set([...defaultPackages, ...sessionMetadata.packages])]
       : defaultPackages;
 
+    let installErrors: string[] = []
+
     const installedPackages = await prepare_env.install_imports(
       pythonCode,
       additionalPackagesToInstall,
+      (event_type: string, data: string) => {
+        if (event_type === "failed") {
+          installErrors.push(data)
+        }
+      }
     );
+
+    if (installErrors.length > 0) {
+      // Restore the original console.log function
+      console.log = originalLog;
+      return {
+        success: false,
+        error: `Failed to install required Python packages: ${installErrors.join(", ")}. ` +
+          `This is likely because these packages are not available in the Pyodide environment. ` +
+          `Pyodide is a Python runtime that runs in the browser and has a limited set of ` +
+          `pre-built packages. You may need to use alternative packages that are compatible ` +
+          `with Pyodide.`
+      };
+    }
 
     if (options.sessionBytes) {
       sessionData = Uint8Array.from(JSON.parse(options.sessionBytes));
