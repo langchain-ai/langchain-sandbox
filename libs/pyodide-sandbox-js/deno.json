@@ -1,6 +1,6 @@
 {
-  "name": "@eyurtsev/test-sandbox",
-  "version": "0.0.7",
+  "name": "@eyurtsev/pyodide-sandbox",
+  "version": "0.0.8",
   "license": "MIT",
   "exports": "./main.ts",
   "tasks": {
