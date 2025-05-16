@@ -94,10 +94,10 @@ async def install_imports(
 
         for entry in to_install:
             try:
-              await micropip.install(entry["package"])
+                await micropip.install(entry["package"])
             except Exception as e:
-              message_callback("failed", entry["package"])
-              break # Fail fast
+                message_callback("failed", entry["package"])
+                break # Fail fast
     return to_install
 
 
