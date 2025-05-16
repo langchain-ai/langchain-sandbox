@@ -5,7 +5,8 @@ description = "LangChain Sandbox"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "langchain-core>=0.3.56,<0.4.0"
+  "langchain-core>=0.3.56,<0.4.0",
+  "langgraph>=0.4.3"
 ]
 
 [dependency-groups]
@@ -46,6 +47,7 @@ select = [
 ignore = [
   "ARG",
   "COM812",
+  "PLR0913",
 ]
 
 

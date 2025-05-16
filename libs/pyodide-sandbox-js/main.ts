@@ -88,18 +88,23 @@ async def install_imports(
     return to_install
 
 
-def load_session(path: str) -> List[str]:
+def load_session_bytes(session_bytes: bytes) -> list[str]:
     """Load the session module."""
     import dill
+    import io
 
-    dill.session.load_session(filename=path)
+    buffer = io.BytesIO(session_bytes.to_py())
+    dill.session.load_session(filename=buffer)
 
 
-def dump_session(path: str) -> None:
+def dump_session_bytes() -> bytes:
     """Dump the session module."""
     import dill
+    import io
 
-    dill.session.dump_session(filename=path)
+    buffer = io.BytesIO()
+    dill.session.dump_session(filename=buffer)
+    return buffer.getvalue()
 
 
 def robust_serialize(obj):
@@ -159,6 +164,8 @@ interface PyodideResult {
   stderr?: string[];
   error?: string;
   jsonResult?: string;
+  sessionBytes?: Uint8Array;
+  sessionMetadata?: SessionMetadata;
 }
 
 async function initPyodide(pyodide: any): Promise<void> {
@@ -174,8 +181,9 @@ async function initPyodide(pyodide: any): Promise<void> {
 async function runPython(
   pythonCode: string,
   options: {
-    session?: string;
-    sessionsDir?: string;
+    stateful?: boolean;
+    sessionBytes?: string;
+    sessionMetadata?: string;
   }
 ): Promise<PyodideResult> {
   const output: string[] = [];
@@ -197,95 +205,40 @@ async function runPython(
     await initPyodide(pyodide);
 
     // Determine session directory
-    const sessionsDir = options.sessionsDir || Deno.cwd();
-    let sessionMetadata: SessionMetadata = {
-      created: new Date().toISOString(),
-      lastModified: new Date().toISOString(),
-      packages: [],
+    let sessionMetadata: SessionMetadata;
+    if (options.sessionMetadata) {
+      sessionMetadata = JSON.parse(options.sessionMetadata);
+    } else {
+      sessionMetadata = {
+        created: new Date().toISOString(),
+        lastModified: new Date().toISOString(),
+        packages: [],
+      };
     };
-    let sessionJsonPath: string;
-    let isExistingSession = false;
+    let sessionData: Uint8Array | null = null;
 
-    // Handle session if provided
-    if (options.session) {
-      // Create session directory path
-      const sessionDirPath = join(sessionsDir, options.session);
-      const sessionPklPath = join(sessionDirPath, `session.pkl`);
-      sessionJsonPath = join(sessionDirPath, `session.json`);
-      
-      // Ensure session directory exists
-      try {
-        const dirInfo = await Deno.stat(sessionDirPath);
-        if (!dirInfo.isDirectory) {
-          console.error(`Path exists but is not a directory: ${sessionDirPath}`);
-          return { success: false, error: `Path exists but is not a directory: ${sessionDirPath}` };
-        }
-      } catch (error) {
-        // Directory doesn't exist, create it
-        if (error instanceof Deno.errors.NotFound) {
-          try {
-            await Deno.mkdir(sessionDirPath, { recursive: true });
-          } catch (mkdirError: any) {
-            console.error(`Error creating session directory: ${mkdirError.message}`);
-            return { success: false, error: mkdirError.message };
-          }
-        } else {
-          console.error(`Error accessing session directory: ${(error as Error).message}`);
-          return { success: false, error: (error as Error).message };
-        }
-      }
-
-      try {
-        // Check if both session pickle and metadata files exist
-        const [pklStat, jsonStat] = await Promise.all([
-          Deno.stat(sessionPklPath),
-          Deno.stat(sessionJsonPath)
-        ]).catch(() => [null, null]);
-        
-        isExistingSession = (pklStat?.isFile && jsonStat?.isFile) || false;
-      } catch {
-        // Error checking files, assume they don't exist
-        isExistingSession = false;
-      }
-
-      // Create or load session metadata
-      if (!isExistingSession) {
-        // Create new session metadata file
-        await Deno.writeTextFile(
-          sessionJsonPath,
-          JSON.stringify(sessionMetadata, null, 2)
-        );
-      } else {
-        // Load existing session metadata
-        const jsonContent = await Deno.readTextFile(sessionJsonPath);
-        sessionMetadata = JSON.parse(jsonContent);
-      }
-
-      // Load PKL file into pyodide if it exists
-      try {
-        const sessionData = await Deno.readFile(sessionPklPath);
-        pyodide.FS.writeFile(`/${options.session}.pkl`, sessionData);
-      } catch (error) {
-        // File doesn't exist or can't be read, skip loading
-      }
+    if (options.sessionBytes && !options.sessionMetadata) {
+      console.error("sessionMetadata is required when providing sessionBytes");
+      return { success: false, error: "sessionMetadata is required when providing sessionBytes" };
     }
-
+      
     // Import our prepared environment module
     const prepare_env = pyodide.pyimport("prepare_env");
-    
-    // Prepare additional packages to install (include dill if using sessions)
-    const additionalPackagesToInstall = options.session
-      ? [...new Set([...sessionMetadata.packages, "dill"])]
-      : [];
+    // Prepare additional packages to install (include dill)
+    const defaultPackages = options.stateful ? ["dill"] : [];
+    const additionalPackagesToInstall = options.sessionBytes
+      ? [...new Set([...defaultPackages, ...sessionMetadata.packages])]
+      : defaultPackages;
 
     const installedPackages = await prepare_env.install_imports(
       pythonCode,
       additionalPackagesToInstall,
     );
 
-    if (options.session && isExistingSession) {
+    if (options.sessionBytes) {
+      sessionData = Uint8Array.from(JSON.parse(options.sessionBytes));
       // Run session preamble
-      await prepare_env.load_session(`/${options.session}.pkl`);
+      await prepare_env.load_session_bytes(sessionData);
     }
 
     const packages = installedPackages.map((pkg: any) => pkg.get("package"));
@@ -296,35 +249,30 @@ async function runPython(
     const rawValue = await pyodide.runPythonAsync(pythonCode);
     // Dump result to string
     const jsonValue = await prepare_env.dumps(rawValue);
-    
-    if (options.session) {
-      // Save session state
-      await prepare_env.dump_session(`/${options.session}.pkl`);
 
-      // Update session metadata with installed packages
-      sessionMetadata.packages = [
-        ...new Set([...sessionMetadata.packages, ...packages]),
-      ];
-      sessionMetadata.lastModified = new Date().toISOString();
-      await Deno.writeTextFile(
-        sessionJsonPath as string,
-        JSON.stringify(sessionMetadata, null, 2)
-      );
+    // Update session metadata with installed packages
+    sessionMetadata.packages = [
+      ...new Set([...sessionMetadata.packages, ...packages]),
+    ];
+    sessionMetadata.lastModified = new Date().toISOString();
 
-      // Save session file back to host machine
-      const sessionData = pyodide.FS.readFile(`/${options.session}.pkl`);
-      const sessionDirPath = join(sessionsDir, options.session);
-      const sessionPklPath = join(sessionDirPath, `session.pkl`);
-      await Deno.writeFile(sessionPklPath, sessionData);
-    }
+    if (options.stateful) {
+      // Save session state to sessionBytes
+      sessionData = await prepare_env.dump_session_bytes() as Uint8Array;
+    };
     // Return the result with stdout and stderr output
-    return { 
+    const result: PyodideResult = {
       success: true, 
       result: rawValue,
       jsonResult: jsonValue,
       stdout: output,
-      stderr: err_output
+      stderr: err_output,
+      sessionMetadata: sessionMetadata,
     };
+    if (options.stateful && sessionData) {
+      result["sessionBytes"] = sessionData;
+    }
+    return result;
   } catch (error: any) {
     return { 
       success: false, 
@@ -337,17 +285,18 @@ async function runPython(
 
 async function main(): Promise<void> {
   const flags = parseArgs(Deno.args, {
-    string: ["code", "file", "session", "sessions-dir"],
+    string: ["code", "file", "session-bytes", "session-metadata"],
     alias: {
       c: "code",
       f: "file",
-      s: "session",
-      d: "sessions-dir",
       h: "help",
       V: "version",
+      s: "stateful",
+      b: "session-bytes",
+      m: "session-metadata",
     },
-    boolean: ["help", "version"],
-    default: { help: false, version: false },
+    boolean: ["help", "version", "stateful"],
+    default: { help: false, version: false, stateful: false },
   });
 
   if (flags.help) {
@@ -358,8 +307,9 @@ Run Python code in a sandboxed environment using Pyodide
 OPTIONS:
   -c, --code <code>            Python code to execute
   -f, --file <path>            Path to Python file to execute
-  -s, --session <string>       Session name
-  -d, --sessions-dir <path>    Directory to store session files
+  -s, --stateful <bool>        Use a stateful session
+  -b, --session-bytes <bytes>  Session bytes
+  -m, --session-metadata       Session metadata
   -h, --help                   Display help
   -V, --version                Display version
 `);
@@ -368,14 +318,15 @@ OPTIONS:
 
   if (flags.version) {
     console.log(pkgVersion)
-    return;
+    return
   }
 
   const options = {
     code: flags.code,
     file: flags.file,
-    session: flags.session,
-    sessionsDir: flags["sessions-dir"],
+    stateful: flags.stateful,
+    sessionBytes: flags["session-bytes"],
+    sessionMetadata: flags["session-metadata"],
   };
 
   if (!options.code && !options.file) {
@@ -383,41 +334,6 @@ OPTIONS:
       "Error: You must provide Python code using either -c/--code or -f/--file option.\nUse --help for usage information."
     );
     Deno.exit(1);
-  }
-
-  // Validate session ID if provided
-  if (options.session) {
-    const validSessionIdRegex = /^[a-zA-Z0-9_-]+$/;
-    if (!validSessionIdRegex.test(options.session)) {
-      console.error(
-        "Error: Session ID must only contain letters, numbers, underscores, and hyphens."
-      );
-      Deno.exit(1);
-    }
-  }
-
-  // Ensure sessions directory exists if specified
-  if (options.sessionsDir) {
-    try {
-      try {
-        const dirInfo = await Deno.stat(options.sessionsDir);
-        if (!dirInfo.isDirectory) {
-          throw new Error(
-            `Path exists but is not a directory: ${options.sessionsDir}`
-          );
-        }
-      } catch (error) {
-        // Directory doesn't exist, create it
-        if (error instanceof Deno.errors.NotFound) {
-          await Deno.mkdir(options.sessionsDir, { recursive: true });
-        } else {
-          throw error;
-        }
-      }
-    } catch (error: any) {
-      console.error(`Error creating sessions directory: ${error.message}`);
-      Deno.exit(1);
-    }
   }
 
   // Get Python code from file or command line argument
@@ -440,8 +356,9 @@ OPTIONS:
   }
 
   const result = await runPython(pythonCode, {
-    session: options.session,
-    sessionsDir: options.sessionsDir,
+    stateful: options.stateful,
+    sessionBytes: options.sessionBytes,
+    sessionMetadata: options.sessionMetadata,
   });
 
   // Exit with error code if Python execution failed
@@ -451,6 +368,8 @@ OPTIONS:
     stderr: result.success ? (result.stderr.join('') || null) : result.error || null,
     result: result.success ? JSON.parse(result.jsonResult || 'null') : null,
     success: result.success,
+    sessionBytes: result.sessionBytes,
+    sessionMetadata: result.sessionMetadata,
   };
 
   // Output as JSON to stdout

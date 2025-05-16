@@ -4,10 +4,18 @@ import asyncio
 import dataclasses
 import json
 import logging
-import re
 import subprocess
 import time
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
+
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForToolRun,
+    CallbackManagerForToolRun,
+)
+from langchain_core.messages import ToolMessage
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool, InjectedToolCallId
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +32,11 @@ class CodeExecutionResult:
     stderr: str | None = None
     status: Status
     execution_time: float
+    session_metadata: dict | None = None
+    session_bytes: bytes | None = None
 
 
+# Published package name
 PKG_NAME = "jsr:@eyurtsev/test-sandbox@0.0.7"
 
 
@@ -79,10 +90,10 @@ class PyodideSandbox:
     - Streaming stdout/stderr capture
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
-        sessions_dir: str,
         *,
+        stateful: bool = False,
         allow_env: list[str] | bool = False,
         allow_read: list[str] | bool = False,
         allow_write: list[str] | bool = False,
@@ -99,9 +110,11 @@ class PyodideSandbox:
         based on the needs of the code being executed.
 
         Args:
-            sessions_dir: Directory for storing session data. This directory must
-                be writable by the Deno subprocess. It is used to persist session
-                state between executions.
+            stateful: Whether to use a stateful session. If True, `sandbox.execute`
+                will include session metadata and the session bytes containing the
+                session state (variables, imports, etc.) in the execution result.
+                This allows saving and reusing the session state between executions.
+
             allow_env: Environment variable access configuration:
                 - False: No environment access (default, most secure)
                 - True: Unrestricted access to all environment variables
@@ -114,7 +127,7 @@ class PyodideSandbox:
                 - List[str]: Read access restricted to specific paths, e.g.
                   ["/tmp/sandbox", "./data"]
 
-                  By default allows read to node_modules and to sessions dir
+                  By default allows read from node_modules
 
             allow_write: File system write access configuration:
                 - False: No file system write access (default, most secure)
@@ -122,7 +135,7 @@ class PyodideSandbox:
                 - List[str]: Write access restricted to specific paths, e.g.
                   ["/tmp/sandbox/output"]
 
-                  By default allows read to node_modules and to sessions dir
+                  By default allows write to node_modules
 
             allow_net: Network access configuration:
                 - False: No network access (default, most secure)
@@ -146,15 +159,7 @@ class PyodideSandbox:
                 the default directory for Deno modules.
 
         """
-        if "," in sessions_dir:
-            # Very simple check to protect a user against typos.
-            # The goal isn't to be exhaustive on validation here.
-            msg = "Please provide a valid session directory."
-            raise ValueError(msg)
-
-        # Store configuration
-        self.sessions_dir = sessions_dir
-
+        self.stateful = stateful
         # Configure permissions
         self.permissions = []
 
@@ -173,9 +178,9 @@ class PyodideSandbox:
         perm_defs = [
             ("--allow-env", allow_env, None),
             # For file system permissions, if no permission is specified,
-            # force session_dir and node_modules
-            ("--allow-read", allow_read, [sessions_dir, "node_modules"]),
-            ("--allow-write", allow_write, [sessions_dir, "node_modules"]),
+            # force node_modules
+            ("--allow-read", allow_read, ["node_modules"]),
+            ("--allow-write", allow_write, ["node_modules"]),
             ("--allow-net", allow_net, None),
             ("--allow-run", allow_run, None),
             ("--allow-ffi", allow_ffi, None),
@@ -192,42 +197,12 @@ class PyodideSandbox:
 
         self.permissions.append(f"--node-modules-dir={node_modules_dir}")
 
-        # Regular expression for validating session IDs
-        self.session_id_pattern = re.compile(r"^[a-zA-Z0-9\-_]+$")
-
-    def _validate_session_id(self, session_id: str | None) -> str | None:
-        """Validate the session ID against the allowed pattern.
-
-        Args:
-            session_id: The session ID to validate
-
-        Returns:
-            The session ID if valid, None otherwise
-
-        Raises:
-            ValueError: If the session ID contains invalid characters
-
-        """
-        if session_id is None:
-            return None
-
-        if not self.session_id_pattern.match(session_id):
-            msg = (
-                f"Invalid session ID: {session_id}. "
-                "Session IDs must contain only alphanumeric characters, "
-                "hyphens, and underscores."
-            )
-            raise ValueError(
-                msg,
-            )
-
-        return session_id
-
     async def execute(
         self,
         code: str,
         *,
-        session_id: str | None = None,
+        session_bytes: bytes | None = None,
+        session_metadata: dict | None = None,
         timeout_seconds: float | None = None,
         memory_limit_mb: int | None = None,
     ) -> CodeExecutionResult:
@@ -253,10 +228,13 @@ class PyodideSandbox:
 
         Args:
             code: The Python code to execute in the sandbox
-            session_id: Optional session identifier for maintaining state between
-                        executions. Can be used to persist variables, imports,
-                        and definitions across multiple execute() calls. If None,
-                        a new session is created.
+            session_bytes: Optional bytes to be used as the initial session state.
+                        This is used to resume code execution from the same session.
+                        You can use this instead of `session_id`.
+                        Note: when using this, you need to provide `session_metadata`.
+            session_metadata: Optional metadata to be used as the initial session state.
+                        This is used to resume code execution from the same session.
+                        Note: when using this, you need to provide `session_bytes`.
             timeout_seconds: Maximum execution time in seconds before the process
                         is terminated. If None, execution may run indefinitely
                         (not recommended for untrusted code).
@@ -298,18 +276,21 @@ class PyodideSandbox:
             cmd.append(f"--v8-flags=--max-old-space-size={memory_limit_mb}")
 
         # Add the path to the JavaScript wrapper script
-        # Developer version
         cmd.append(PKG_NAME)
 
         # Add script path and code
         cmd.extend(["-c", code])
 
-        # Add session ID if provided
-        if session_id:
-            cmd.extend(["-s", session_id])
+        if self.stateful:
+            cmd.extend(["-s"])
 
-        # Ensure the sessions directory exists
-        cmd.extend(["-d", self.sessions_dir])
+        if session_bytes:
+            # Convert bytes to list of integers and then to JSON string
+            bytes_array = list(session_bytes)
+            cmd.extend(["-b", json.dumps(bytes_array)])
+
+        if session_metadata:
+            cmd.extend(["-m", json.dumps(session_metadata)])
 
         # Create and run the subprocess
         process = await asyncio.create_subprocess_exec(
@@ -334,6 +315,12 @@ class PyodideSandbox:
                 stderr = full_result.get("stderr", None)
                 result = full_result.get("result", None)
                 status = "success" if full_result.get("success", False) else "error"
+                session_metadata = full_result.get("sessionMetadata", None)
+                # Convert the Uint8Array to Python bytes
+                session_bytes_array = full_result.get("sessionBytes", None)
+                session_bytes = (
+                    bytes(session_bytes_array) if session_bytes_array else None
+                )
             else:
                 stderr = stderr_bytes.decode("utf-8", errors="replace")
                 status = "error"
@@ -353,4 +340,206 @@ class PyodideSandbox:
             stdout=stdout or None,
             stderr=stderr or None,
             result=result,
+            session_metadata=session_metadata,
+            session_bytes=session_bytes,
         )
+
+
+class PyodideSandboxTool(BaseTool):
+    """Tool for running python code in a PyodideSandbox.
+
+    If you use a stateful sandbox (PyodideSandboxTool(stateful=True)),
+    the state between code executions (to variables, imports,
+    and definitions, etc.), will be persisted using LangGraph checkpointer.
+
+    !!! important
+        When you use a stateful sandbox, this tool can only be used
+        inside a LangGraph graph with a checkpointer, and
+        has to be used with the prebuilt `create_react_agent` or `ToolNode`.
+
+    Example: stateless sandbox usage
+
+        ```python
+        from langgraph.prebuilt import create_react_agent
+        from langchain_sandbox import PyodideSandboxTool
+
+        tool = PyodideSandboxTool(allow_net=True)
+        agent = create_react_agent(
+            "anthropic:claude-3-7-sonnet-latest",
+            tools=[tool],
+        )
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": "what's 5 + 7?"}]},
+        )
+        ```
+
+    Example: stateful sandbox usage
+
+        ```python
+        from langgraph.prebuilt import create_react_agent
+        from langgraph.prebuilt.chat_agent_executor import AgentState
+        from langgraph.checkpoint.memory import InMemorySaver
+        from langchain_sandbox import PyodideSandboxTool, PyodideSandbox
+
+        class State(AgentState):
+            session_bytes: bytes
+            session_metadata: dict
+
+        tool = PyodideSandboxTool(stateful=True, allow_net=True)
+        agent = create_react_agent(
+            "anthropic:claude-3-7-sonnet-latest",
+            tools=[tool],
+            checkpointer=InMemorySaver(),
+            state_schema=State
+        )
+        result = await agent.ainvoke(
+            {
+                "messages": [
+                    {"role": "user", "content": "what's 5 + 7? save result as 'a'"}
+                ],
+                "session_bytes": None,
+                "session_metadata": None
+            },
+            config={"configurable": {"thread_id": "123"}},
+        )
+        second_result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": "what's the sine of 'a'?"}]},
+            config={"configurable": {"thread_id": "123"}},
+        )
+        ```
+    """
+
+    name: str = "python_code_sandbox"
+    description: str = (
+        "A secure Python code sandbox. Use this to execute python commands.\n"
+        "- Input should be a valid python command.\n"
+        "- To return output, you should print it out with `print(...)`.\n"
+        "- Don't use f-strings when printing outputs.\n"
+        "- If you need to make web requests, use `httpx.AsyncClient`."
+    )
+
+    # Mirror the PyodideSandbox constructor arguments
+    stateful: bool = False
+    allow_env: list[str] | bool = False
+    allow_read: list[str] | bool = False
+    allow_write: list[str] | bool = False
+    allow_net: list[str] | bool = False
+    allow_run: list[str] | bool = False
+    allow_ffi: list[str] | bool = False
+    node_modules_dir: str = "auto"
+
+    _sandbox: PyodideSandbox
+
+    def __init__(self, **kwargs: dict[str, Any]) -> None:
+        """Initialize the tool."""
+        super().__init__(**kwargs)
+
+        if self.stateful:
+            try:
+                from langgraph.prebuilt import InjectedState
+            except ImportError as e:
+                error_msg = (
+                    "The 'langgraph' package is required when using a stateful sandbox."
+                    " Please install it with 'pip install langgraph'."
+                )
+                raise ImportError(error_msg) from e
+
+            class PyodideSandboxToolInput(BaseModel):
+                """Python code to execute in the sandbox."""
+
+                code: str = Field(description="Code to execute.")
+                # these fields will be ignored by the LLM
+                # and automatically injected by LangGraph's ToolNode
+                state: Annotated[dict[str, Any] | BaseModel, InjectedState]
+                tool_call_id: Annotated[str, InjectedToolCallId]
+
+        else:
+
+            class PyodideSandboxToolInput(BaseModel):
+                """Python code to execute in the sandbox."""
+
+                code: str = Field(description="Code to execute.")
+
+        self.args_schema: type[BaseModel] = PyodideSandboxToolInput
+        self._sandbox = PyodideSandbox(
+            stateful=self.stateful,
+            allow_env=self.allow_env,
+            allow_read=self.allow_read,
+            allow_write=self.allow_write,
+            allow_net=self.allow_net,
+            allow_run=self.allow_run,
+            allow_ffi=self.allow_ffi,
+            node_modules_dir=self.node_modules_dir,
+        )
+
+    def _run(
+        self,
+        code: str,
+        state: dict[str, Any] | BaseModel | None = None,
+        tool_call_id: str | None = None,
+        config: RunnableConfig | None = None,
+        run_manager: CallbackManagerForToolRun | None = None,
+    ) -> Any:  # noqa: ANN401
+        """Use the tool."""
+        error_msg = (
+            "Sync invocation of PyodideSandboxTool is not supported - "
+            "please invoke the tool asynchronously using `await tool.ainvoke()`"
+        )
+        raise NotImplementedError(error_msg)
+
+    async def _arun(
+        self,
+        code: str,
+        state: dict[str, Any] | BaseModel | None = None,
+        tool_call_id: str | None = None,
+        config: RunnableConfig | None = None,
+        run_manager: AsyncCallbackManagerForToolRun | None = None,
+    ) -> Any:  # noqa: ANN401
+        """Use the tool asynchronously."""
+        if self.stateful:
+            required_keys = {"session_bytes", "session_metadata", "messages"}
+            actual_keys = set(state) if isinstance(state, dict) else set(state.__dict__)
+            if missing_keys := required_keys - actual_keys:
+                error_msg = (
+                    "Input state is missing "
+                    f"the following required keys: {missing_keys}"
+                )
+                raise ValueError(error_msg)
+
+            if isinstance(state, dict):
+                session_bytes = state["session_bytes"]
+                session_metadata = state["session_metadata"]
+            else:
+                session_bytes = state.session_bytes
+                session_metadata = state.session_metadata
+
+            result = await self._sandbox.execute(
+                code, session_bytes=session_bytes, session_metadata=session_metadata
+            )
+        else:
+            result = await self._sandbox.execute(code)
+
+        if result.stderr:
+            tool_result = f"Error during execution: {result.stderr}"
+        else:
+            tool_result = result.stdout
+
+        if self.stateful:
+            from langgraph.types import Command
+
+            # if the tool is used with a stateful sandbox,
+            # we need to update the graph state with the new session bytes and metadata
+            return Command(
+                update={
+                    "session_bytes": result.session_bytes,
+                    "session_metadata": result.session_metadata,
+                    "messages": [
+                        ToolMessage(
+                            content=tool_result,
+                            tool_call_id=tool_call_id,
+                        )
+                    ],
+                }
+            )
+
+        return tool_result
