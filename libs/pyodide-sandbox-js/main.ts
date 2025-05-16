@@ -397,7 +397,7 @@ OPTIONS:
   // Exit with error code if Python execution failed
   // Create output JSON with stdout, stderr, and result
   const outputJson = {
-    stdout: result.success ? (result.stdout?.join('') || null) : null,
+    stdout: result.stdout?.join('') || null,
     stderr: result.success ? (result.stderr?.join('') || null) : result.error || null,
     result: result.success ? JSON.parse(result.jsonResult || 'null') : null,
     success: result.success,
