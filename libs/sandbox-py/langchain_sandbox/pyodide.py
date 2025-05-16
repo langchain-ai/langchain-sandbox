@@ -26,7 +26,7 @@ class CodeExecutionResult:
     execution_time: float
 
 
-PKG_NAME = "jsr:@eyurtsev/test-sandbox@0.0.7"
+PKG_NAME = "https://raw.githubusercontent.com/n-sviridenko/test-piodide-sandbox/main/main.ts"
 
 
 def build_permission_flag(
