@@ -108,9 +108,9 @@ print(await sandbox.execute("float(x[0])", session_bytes=result.session_bytes, s
 You can use `PyodideSandbox` as a LangChain tool:
 
 ```python
-from langchain_sandbox import PyodideStatelessSandboxTool
+from langchain_sandbox import PyodideSandboxTool
 
-tool = PyodideStatelessSandboxTool()
+tool = PyodideSandboxTool()
 result = await tool.ainvoke("print('Hello, world!')")
 ```
 
