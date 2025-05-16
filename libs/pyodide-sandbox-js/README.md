@@ -4,18 +4,7 @@ A simple CLI tool for running Python code in a sandboxed environment using Pyodi
 
 ## Installation
 
-```shell
-# Install using Deno
-deno install -A pyodide-sandbox.ts
-```
-
-## Testing
-
-Run the tests with:
-
-```shell
-deno test --allow-read --allow-write
-```
+No installation needed! Run directly using Deno with JSR.
 
 ## Usage
 
@@ -24,13 +13,13 @@ deno test --allow-read --allow-write
 Run a simple Python statement:
 
 ```shell
-deno run -N -R=node_modules,sessions -W=node_modules,sessions --node-modules-dir=auto ./main.ts -c "print('Hello, World!')"
+deno run -A jsr:@eyurtsev/pyodide-sandbox -c "print('Hello, World!')"
 ```
 
 Run calculations and get results:
 
 ```shell
-deno run -N -R=node_modules,sessions -W=node_modules,sessions --node-modules-dir=auto ./main.ts -c "result = 2 + 2; print(f'2 + 2 = {result}')"
+deno run -A jsr:@eyurtsev/pyodide-sandbox -c "result = 2 + 2; print(f'2 + 2 = {result}')"
 ```
 
 ### Using External Packages
@@ -38,7 +27,7 @@ deno run -N -R=node_modules,sessions -W=node_modules,sessions --node-modules-dir
 Imports will be automatically detected and installed using micropip if possible:
 
 ```shell
-deno run -N -R=node_modules,sessions -W=node_modules,sessions --node-modules-dir=auto ./main.ts -c "import numpy as np; x = np.ones((3, 3)); print(x)"
+deno run -A jsr:@eyurtsev/pyodide-sandbox -c "import numpy as np; x = np.ones((3, 3)); print(x)"
 ```
 
 ### Stateful Sessions
@@ -46,13 +35,13 @@ deno run -N -R=node_modules,sessions -W=node_modules,sessions --node-modules-dir
 Create a stateful session that remembers variables:
 
 ```shell
-deno run -N -R=node_modules,sessions -W=node_modules,sessions --node-modules-dir=auto ./main.ts -c "import numpy as np; x = np.ones((3, 3))" -s -d sessions
+deno run -A jsr:@eyurtsev/pyodide-sandbox -c "import numpy as np; x = np.ones((3, 3))" -s
 ```
 
 Use the previous session to access variables:
 
 ```shell
-deno run -N -R=node_modules,sessions -W=node_modules,sessions --node-modules-dir=auto ./main.ts -c "print(x)" -s -d sessions
+deno run -A jsr:@eyurtsev/pyodide-sandbox -c "print(x)" -s -b <session_bytes>
 ```
 
 ## Notes on Package Compatibility
@@ -74,3 +63,14 @@ OPTIONS:
   -h, --help                   Display help
   -V, --version                Display version
 ```
+
+## Local Development
+
+### Testing
+
+Run the tests with:
+
+```shell
+deno test --allow-read --allow-write
+```
+
