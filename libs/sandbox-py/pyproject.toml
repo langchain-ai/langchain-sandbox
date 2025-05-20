@@ -10,6 +10,9 @@ dependencies = [
 ]
 
 [dependency-groups]
+dev = [
+    "ipython>=8.36.0",
+]
 test = [
     "pytest>=8.3.4",
     "pytest-asyncio>=0.25.3",
