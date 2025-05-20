@@ -535,6 +535,7 @@ class PyodideSandboxTool(BaseTool):
         *,
         stateful: bool = False,
         timeout_seconds: float | None = 60,
+        allow_net: list[str] | bool = False,
         **kwargs: dict[str, Any],
     ) -> None:
         """Initialize the tool.
@@ -545,9 +546,20 @@ class PyodideSandboxTool(BaseTool):
                 session state (variables, imports, etc.) in the execution result.
                 This allows saving and reusing the session state between executions.
             timeout_seconds: Timeout for code execution in seconds.
+            allow_net: configure network access. If setting to True, any network access
+                is allowed, including potentially internal network addresses that you
+                may not want to expose to a malicious actor.
+                Depending on your use case, you can restrict the network access to
+                only the URLs you need (e.g., required to set up micropip / pyodide).
+                Please refer to pyodide documentation for more details.
             **kwargs: Other attributes will be passed to the PyodideSandbox
         """
-        super().__init__(stateful=stateful, timeout_seconds=timeout_seconds, **kwargs)
+        super().__init__(
+            stateful=stateful,
+            timeout_seconds=timeout_seconds,
+            allow_net=allow_net,
+            **kwargs,
+        )
 
         if self.stateful:
             try:

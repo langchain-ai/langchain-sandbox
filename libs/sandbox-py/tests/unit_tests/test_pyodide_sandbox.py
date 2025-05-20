@@ -167,7 +167,7 @@ def test_sync_pyodide_sandbox_timeout(pyodide_package: None) -> None:
 
 def test_pyodide_sandbox_tool() -> None:
     """Test synchronous invocation of PyodideSandboxTool."""
-    tool = PyodideSandboxTool(stateful=False)
+    tool = PyodideSandboxTool(stateful=False, allow_net=True)
     result = tool.invoke("x = 5; print(x)")
     assert result == "5"
     result = tool.invoke("x = 5; print(1); print(2)")
@@ -176,14 +176,14 @@ def test_pyodide_sandbox_tool() -> None:
 
 def test_pyodide_timeout() -> None:
     """Test synchronous invocation of PyodideSandboxTool with timeout."""
-    tool = PyodideSandboxTool(stateful=False, timeout_seconds=0.1)
+    tool = PyodideSandboxTool(stateful=False, timeout_seconds=0.1, allow_net=True)
     result = tool.invoke("while True: pass")
     assert result == "Error during execution: Execution timed out after 0.1 seconds"
 
 
 async def test_async_pyodide_sandbox_tool() -> None:
     """Test synchronous invocation of PyodideSandboxTool."""
-    tool = PyodideSandboxTool(stateful=False)
+    tool = PyodideSandboxTool(stateful=False, allow_net=True)
     result = await tool.ainvoke("x = 5; print(x)")
     assert result == "5"
     result = await tool.ainvoke("x = 5; print(1); print(2)")
@@ -194,6 +194,6 @@ async def test_async_pyodide_sandbox_tool() -> None:
 
 async def test_async_pyodide_timeout() -> None:
     """Test synchronous invocation of PyodideSandboxTool with timeout."""
-    tool = PyodideSandboxTool(stateful=False, timeout_seconds=0.1)
+    tool = PyodideSandboxTool(stateful=False, timeout_seconds=0.1, allow_net=True)
     result = await tool.ainvoke("while True: pass")
     assert result == "Error during execution: Execution timed out after 0.1 seconds"
