@@ -9,6 +9,7 @@ import time
 from typing import Annotated, Any, Literal
 
 from langchain_core.callbacks import (
+    AsyncCallbackManagerForToolRun,
     CallbackManagerForToolRun,
 )
 from langchain_core.messages import ToolMessage
@@ -680,7 +681,7 @@ class PyodideSandboxTool(BaseTool):
         state: dict[str, Any] | BaseModel | None = None,
         tool_call_id: str | None = None,
         config: RunnableConfig | None = None,
-        run_manager: CallbackManagerForToolRun | None = None,
+        run_manager: AsyncCallbackManagerForToolRun | None = None,
     ) -> Any:  # noqa: ANN401
         """Use the tool synchronously."""
         if self.stateful:
