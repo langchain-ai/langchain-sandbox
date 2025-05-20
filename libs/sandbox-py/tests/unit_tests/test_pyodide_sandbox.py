@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from langchain_sandbox import PyodideSandbox
+from langchain_sandbox import PyodideSandbox, SyncPyodideSandbox
 
 current_dir = Path(__file__).parent
 
@@ -23,6 +23,19 @@ def pyodide_package(monkeypatch: pytest.MonkeyPatch) -> None:
 def get_default_sandbox(stateful: bool = False) -> PyodideSandbox:
     """Get default PyodideSandbox instance for testing."""
     return PyodideSandbox(
+        stateful=stateful,
+        allow_read=True,
+        allow_write=True,
+        allow_net=True,
+        allow_env=False,
+        allow_run=False,
+        allow_ffi=False,
+    )
+
+
+def get_default_sync_sandbox(stateful: bool = False) -> SyncPyodideSandbox:
+    """Get default SyncPyodideSandbox instance for testing."""
+    return SyncPyodideSandbox(
         stateful=stateful,
         allow_read=True,
         allow_write=True,
@@ -90,5 +103,63 @@ async def test_pyodide_sandbox_timeout(pyodide_package: None) -> None:
     # Test timeout with infinite loop
     # Using a short timeout to avoid long test runs
     result = await sandbox.execute("while True: pass", timeout_seconds=0.5)
+    assert result.status == "error"
+    assert "timed out" in result.stderr.lower()
+
+
+def test_sync_stdout_sessionless(pyodide_package: None) -> None:
+    """Test synchronous execution without a session ID."""
+    sandbox = get_default_sync_sandbox()
+    # Execute a simple piece of code synchronously
+    result = sandbox.execute("x = 5; print(x); x")
+    assert result.status == "success"
+    assert result.stdout == "5"
+    assert result.result == 5
+    assert result.stderr is None
+    assert result.session_bytes is None
+
+
+def test_sync_session_state_persistence_basic(pyodide_package: None) -> None:
+    """Test session state persistence in synchronous mode."""
+    sandbox = get_default_sync_sandbox(stateful=True)
+
+    result1 = sandbox.execute("y = 10; print(y)")
+    result2 = sandbox.execute(
+        "print(y)",
+        session_bytes=result1.session_bytes,
+        session_metadata=result1.session_metadata,
+    )
+
+    # Check session state persistence
+    assert result1.status == "success", f"Encountered error: {result1.stderr}"
+    assert result1.stdout == "10"
+    assert result1.result is None
+    assert result2.status == "success", f"Encountered error: {result2.stderr}"
+    assert result2.stdout == "10"
+    assert result1.result is None
+
+
+def test_sync_pyodide_sandbox_error_handling(pyodide_package: None) -> None:
+    """Test synchronous PyodideSandbox error handling."""
+    sandbox = get_default_sync_sandbox()
+
+    # Test syntax error
+    result = sandbox.execute("x = 5; y = x +")
+    assert result.status == "error"
+    assert "SyntaxError" in result.stderr
+
+    # Test undefined variable error
+    result = sandbox.execute("undefined_variable")
+    assert result.status == "error"
+    assert "NameError" in result.stderr
+
+
+def test_sync_pyodide_sandbox_timeout(pyodide_package: None) -> None:
+    """Test synchronous PyodideSandbox timeout handling."""
+    sandbox = get_default_sync_sandbox()
+
+    # Test timeout with infinite loop
+    # Using a short timeout to avoid long test runs
+    result = sandbox.execute("while True: pass", timeout_seconds=0.5)
     assert result.status == "error"
     assert "timed out" in result.stderr.lower()

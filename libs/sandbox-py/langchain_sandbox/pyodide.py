@@ -37,7 +37,7 @@ class CodeExecutionResult:
 
 
 # Published package name
-PKG_NAME = "jsr:@eyurtsev/pyodide-sandbox@0.0.2"
+PKG_NAME = "jsr:@eyurtsev/pyodide-sandbox@0.0.3"
 
 
 def build_permission_flag(
@@ -543,3 +543,126 @@ class PyodideSandboxTool(BaseTool):
             )
 
         return tool_result
+
+
+class SyncPyodideSandbox(PyodideSandbox):
+    """Synchronous version of PyodideSandbox.
+
+    This class provides a synchronous interface to the PyodideSandbox functionality.
+    It inherits all the security features and configuration options from PyodideSandbox
+    but provides a blocking execute() method instead of an async one.
+    """
+
+    def execute(
+        self,
+        code: str,
+        *,
+        session_bytes: bytes | None = None,
+        session_metadata: dict | None = None,
+        timeout_seconds: float | None = None,
+        memory_limit_mb: int | None = None,
+    ) -> CodeExecutionResult:
+        """Execute Python code synchronously in a sandboxed Deno subprocess.
+
+        This method provides the same functionality as PyodideSandbox.execute() but
+        in a synchronous/blocking manner. See PyodideSandbox.execute() for detailed
+        documentation of parameters and behavior.
+
+        Args:
+            code: The Python code to execute in the sandbox
+            session_bytes: Optional bytes containing session state
+            session_metadata: Optional metadata for session state
+            timeout_seconds: Maximum execution time in seconds
+            memory_limit_mb: Maximum memory usage in MB
+
+        Returns:
+            CodeExecutionResult containing execution results and metadata
+
+        Raises:
+            No exceptions are raised directly; execution errors are captured in the
+            CodeExecutionResult object with the appropriate status.
+        """
+        start_time = time.time()
+        stdout = ""
+        stderr = ""
+        result = None
+        status: Literal["success", "error"] = "success"
+
+        # Create base command with the configured permissions
+        cmd = [
+            "deno",
+            "run",
+        ]
+
+        # Apply permissions
+        cmd.extend(self.permissions)
+
+        # Deno uses the V8 flag --max-old-space-size to limit memory usage in MB
+        if memory_limit_mb is not None and memory_limit_mb > 0:
+            cmd.append(f"--v8-flags=--max-old-space-size={memory_limit_mb}")
+
+        # Add the path to the JavaScript wrapper script
+        cmd.append(PKG_NAME)
+
+        # Add script path and code
+        cmd.extend(["-c", code])
+
+        if self.stateful:
+            cmd.extend(["-s"])
+
+        if session_bytes:
+            # Convert bytes to list of integers and then to JSON string
+            bytes_array = list(session_bytes)
+            cmd.extend(["-b", json.dumps(bytes_array)])
+
+        if session_metadata:
+            cmd.extend(["-m", json.dumps(session_metadata)])
+
+        try:
+            # Run the subprocess with timeout
+            process = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=False,  # Keep as bytes for proper decoding
+                timeout=timeout_seconds,
+                check=False,  # Don't raise on non-zero exit
+            )
+
+            stdout_bytes = process.stdout
+            stderr_bytes = process.stderr
+
+            stdout = stdout_bytes.decode("utf-8", errors="replace")
+
+            if stdout:
+                # stdout encodes the full result from the sandbox
+                # including stdout, stderr, and the json result
+                full_result = json.loads(stdout)
+                stdout = full_result.get("stdout", None)
+                stderr = full_result.get("stderr", None)
+                result = full_result.get("result", None)
+                status = "success" if full_result.get("success", False) else "error"
+                session_metadata = full_result.get("sessionMetadata", None)
+                # Convert the Uint8Array to Python bytes
+                session_bytes_array = full_result.get("sessionBytes", None)
+                session_bytes = (
+                    bytes(session_bytes_array) if session_bytes_array else None
+                )
+            else:
+                stderr = stderr_bytes.decode("utf-8", errors="replace")
+                status = "error"
+
+        except subprocess.TimeoutExpired:
+            status = "error"
+            stderr = f"Execution timed out after {timeout_seconds} seconds"
+
+        end_time = time.time()
+
+        return CodeExecutionResult(
+            status=status,
+            execution_time=end_time - start_time,
+            stdout=stdout or None,
+            stderr=stderr or None,
+            result=result,
+            session_metadata=session_metadata,
+            session_bytes=session_bytes,
+        )
