@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from langchain_sandbox import PyodideSandbox, SyncPyodideSandbox
+from langchain_sandbox import PyodideSandbox, PyodideSandboxTool, SyncPyodideSandbox
 
 current_dir = Path(__file__).parent
 
@@ -163,3 +163,37 @@ def test_sync_pyodide_sandbox_timeout(pyodide_package: None) -> None:
     result = sandbox.execute("while True: pass", timeout_seconds=0.5)
     assert result.status == "error"
     assert "timed out" in result.stderr.lower()
+
+
+def test_pyodide_sandbox_tool() -> None:
+    """Test synchronous invocation of PyodideSandboxTool."""
+    tool = PyodideSandboxTool(stateful=False)
+    result = tool.invoke("x = 5; print(x)")
+    assert result == "5"
+    result = tool.invoke("x = 5; print(1); print(2)")
+    assert result == "12"
+
+
+def test_pyodide_timeout() -> None:
+    """Test synchronous invocation of PyodideSandboxTool with timeout."""
+    tool = PyodideSandboxTool(stateful=False, timeout_seconds=0.1)
+    result = tool.invoke("while True: pass")
+    assert result == "Error during execution: Execution timed out after 0.1 seconds"
+
+
+async def test_async_pyodide_sandbox_tool() -> None:
+    """Test synchronous invocation of PyodideSandboxTool."""
+    tool = PyodideSandboxTool(stateful=False)
+    result = await tool.ainvoke("x = 5; print(x)")
+    assert result == "5"
+    result = await tool.ainvoke("x = 5; print(1); print(2)")
+    # TODO: Need to preserve newlines in the output # noqa: FIX002, TD002
+    # https://github.com/langchain-ai/langchain-sandbox/issues/26
+    assert result == "12"
+
+
+async def test_async_pyodide_timeout() -> None:
+    """Test synchronous invocation of PyodideSandboxTool with timeout."""
+    tool = PyodideSandboxTool(stateful=False, timeout_seconds=0.1)
+    result = await tool.ainvoke("while True: pass")
+    assert result == "Error during execution: Execution timed out after 0.1 seconds"
