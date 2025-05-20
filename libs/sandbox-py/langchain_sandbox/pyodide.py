@@ -64,10 +64,13 @@ def build_permission_flag(
     return None
 
 
-class PyodideSandbox:
-    """Run Python code in a sandboxed environment using Deno and Pyodide.
+class BasePyodideSandbox:
+    """Base class for PyodideSandbox implementations.
 
-    This executor leverages Deno's security model to create a secure runtime for
+    This class provides the common initialization and configuration logic for both
+    synchronous and asynchronous PyodideSandbox implementations.
+
+    The sandbox leverages Deno's security model to create a secure runtime for
     executing untrusted Python code. It works by spawning a Deno subprocess that loads
     Pyodide (Python compiled to WebAssembly) and executes the provided code in an
     isolated environment.
@@ -78,16 +81,11 @@ class PyodideSandbox:
     - Memory usage monitoring
     - Process isolation via Deno's security sandbox
 
-    The executor supports fine-grained permission control through its initializer:
+    The sandbox supports fine-grained permission control through its initializer:
     - Restrict network access to specific domains
     - Limit file system access to specific directories
     - Control environment variable access
     - Prevent subprocess execution and FFI
-
-    Performance characteristics:
-    - Each execution creates a new Deno process
-    - Session support for maintaining state between executions
-    - Streaming stdout/stderr capture
     """
 
     def __init__(
@@ -102,7 +100,7 @@ class PyodideSandbox:
         allow_ffi: list[str] | bool = False,
         node_modules_dir: str = "auto",
     ) -> None:
-        """Initialize the executor with specific Deno permissions.
+        """Initialize the sandbox with specific Deno permissions.
 
         This method configures the security permissions for the Deno subprocess that
         will execute Python code via Pyodide. By default, all permissions are
@@ -157,7 +155,6 @@ class PyodideSandbox:
 
             node_modules_dir: Directory for Node.js modules. Set to "auto" to use
                 the default directory for Deno modules.
-
         """
         self.stateful = stateful
         # Configure permissions
@@ -197,72 +194,25 @@ class PyodideSandbox:
 
         self.permissions.append(f"--node-modules-dir={node_modules_dir}")
 
-    async def execute(
+    def _build_command(
         self,
         code: str,
         *,
         session_bytes: bytes | None = None,
         session_metadata: dict | None = None,
-        timeout_seconds: float | None = None,
         memory_limit_mb: int | None = None,
-    ) -> CodeExecutionResult:
-        """Execute Python code in a sandboxed Deno subprocess with resource constraints.
-
-        This method spawns a Deno subprocess that loads Pyodide (Python compiled
-        to WebAssembly) and executes the provided code within that sandboxed
-        environment. The execution is subject to the permissions configured in the
-        executor's initialization and the resource constraints provided as arguments.
-
-        The code execution flow:
-        1. A Deno subprocess is created with the configured permissions
-        2. The JavaScript wrapper loads Pyodide in the Deno context
-        3. The Python code is passed to Pyodide for execution
-        4. Results and output are captured and returned
-
-        Security features:
-        - Process isolation through Deno's security sandbox
-        - Configurable timeout to prevent infinite loops or long-running code
-        - Memory limit to prevent excessive resource consumption
-        - Permission restrictions based on executor configuration
-        - Controlled access to file system, network, and environment
+    ) -> list[str]:
+        """Build the Deno command with all necessary arguments.
 
         Args:
-            code: The Python code to execute in the sandbox
-            session_bytes: Optional bytes to be used as the initial session state.
-                        This is used to resume code execution from the same session.
-                        You can use this instead of `session_id`.
-                        Note: when using this, you need to provide `session_metadata`.
-            session_metadata: Optional metadata to be used as the initial session state.
-                        This is used to resume code execution from the same session.
-                        Note: when using this, you need to provide `session_bytes`.
-            timeout_seconds: Maximum execution time in seconds before the process
-                        is terminated. If None, execution may run indefinitely
-                        (not recommended for untrusted code).
-            memory_limit_mb: Maximum memory usage in MB. Pass this to Deno to
-                        enforce memory limits in the WebAssembly VM.
+            code: The Python code to execute
+            session_bytes: Optional session state bytes
+            session_metadata: Optional session metadata
+            memory_limit_mb: Optional memory limit in MB
 
         Returns:
-            CodeExecutionResult containing:
-            - result: The value returned by the executed code (if any)
-            - stdout: Standard output captured during execution
-            - stderr: Standard error captured during execution
-            - status: Execution status (success, error, timeout, etc.)
-            - session_id: The session identifier (if provided)
-            - execution_time: Time taken for execution in seconds
-            - execution_info: Additional metadata about the execution
-
-        Raises:
-            No exceptions are raised directly; execution errors are captured in the
-            CodeExecutionResult object with the appropriate status.
-
+            List of command arguments for subprocess execution
         """
-        start_time = time.time()
-        stdout = ""
-        stderr = ""
-        result = None
-        status: Literal["success", "error"] = "success"
-
-        # Create base command with the configured permissions
         cmd = [
             "deno",
             "run",
@@ -291,6 +241,55 @@ class PyodideSandbox:
 
         if session_metadata:
             cmd.extend(["-m", json.dumps(session_metadata)])
+
+        return cmd
+
+
+class PyodideSandbox(BasePyodideSandbox):
+    """Asynchronous implementation of PyodideSandbox.
+
+    This class provides an asynchronous interface for executing Python code in a
+    sandboxed Deno environment using Pyodide.
+    """
+
+    async def execute(
+        self,
+        code: str,
+        *,
+        session_bytes: bytes | None = None,
+        session_metadata: dict | None = None,
+        timeout_seconds: float | None = None,
+        memory_limit_mb: int | None = None,
+    ) -> CodeExecutionResult:
+        """Execute Python code asynchronously in a sandboxed Deno subprocess.
+
+        This method spawns a Deno subprocess that loads Pyodide (Python compiled
+        to WebAssembly) and executes the provided code within that sandboxed
+        environment. The execution is subject to the permissions configured in the
+        sandbox's initialization and the resource constraints provided as arguments.
+
+        Args:
+            code: The Python code to execute in the sandbox
+            session_bytes: Optional bytes containing session state
+            session_metadata: Optional metadata for session state
+            timeout_seconds: Maximum execution time in seconds
+            memory_limit_mb: Maximum memory usage in MB
+
+        Returns:
+            CodeExecutionResult containing execution results and metadata
+        """
+        start_time = time.time()
+        stdout = ""
+        stderr = ""
+        result = None
+        status: Literal["success", "error"] = "success"
+
+        cmd = self._build_command(
+            code,
+            session_bytes=session_bytes,
+            session_metadata=session_metadata,
+            memory_limit_mb=memory_limit_mb,
+        )
 
         # Create and run the subprocess
         process = await asyncio.create_subprocess_exec(
@@ -545,12 +544,12 @@ class PyodideSandboxTool(BaseTool):
         return tool_result
 
 
-class SyncPyodideSandbox(PyodideSandbox):
+class SyncPyodideSandbox(BasePyodideSandbox):
     """Synchronous version of PyodideSandbox.
 
     This class provides a synchronous interface to the PyodideSandbox functionality.
-    It inherits all the security features and configuration options from PyodideSandbox
-    but provides a blocking execute() method instead of an async one.
+    It inherits all the security features and configuration options from
+    BasePyodideSandbox but provides a blocking execute() method.
     """
 
     def execute(
@@ -565,8 +564,7 @@ class SyncPyodideSandbox(PyodideSandbox):
         """Execute Python code synchronously in a sandboxed Deno subprocess.
 
         This method provides the same functionality as PyodideSandbox.execute() but
-        in a synchronous/blocking manner. See PyodideSandbox.execute() for detailed
-        documentation of parameters and behavior.
+        in a synchronous/blocking manner.
 
         Args:
             code: The Python code to execute in the sandbox
@@ -577,10 +575,6 @@ class SyncPyodideSandbox(PyodideSandbox):
 
         Returns:
             CodeExecutionResult containing execution results and metadata
-
-        Raises:
-            No exceptions are raised directly; execution errors are captured in the
-            CodeExecutionResult object with the appropriate status.
         """
         start_time = time.time()
         stdout = ""
@@ -588,35 +582,12 @@ class SyncPyodideSandbox(PyodideSandbox):
         result = None
         status: Literal["success", "error"] = "success"
 
-        # Create base command with the configured permissions
-        cmd = [
-            "deno",
-            "run",
-        ]
-
-        # Apply permissions
-        cmd.extend(self.permissions)
-
-        # Deno uses the V8 flag --max-old-space-size to limit memory usage in MB
-        if memory_limit_mb is not None and memory_limit_mb > 0:
-            cmd.append(f"--v8-flags=--max-old-space-size={memory_limit_mb}")
-
-        # Add the path to the JavaScript wrapper script
-        cmd.append(PKG_NAME)
-
-        # Add script path and code
-        cmd.extend(["-c", code])
-
-        if self.stateful:
-            cmd.extend(["-s"])
-
-        if session_bytes:
-            # Convert bytes to list of integers and then to JSON string
-            bytes_array = list(session_bytes)
-            cmd.extend(["-b", json.dumps(bytes_array)])
-
-        if session_metadata:
-            cmd.extend(["-m", json.dumps(session_metadata)])
+        cmd = self._build_command(
+            code,
+            session_bytes=session_bytes,
+            session_metadata=session_metadata,
+            memory_limit_mb=memory_limit_mb,
+        )
 
         try:
             # Run the subprocess with timeout
