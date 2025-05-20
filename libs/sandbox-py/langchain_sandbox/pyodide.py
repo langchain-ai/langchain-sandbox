@@ -99,6 +99,7 @@ class BasePyodideSandbox:
         allow_run: list[str] | bool = False,
         allow_ffi: list[str] | bool = False,
         node_modules_dir: str = "auto",
+        skip_deno_check: bool = False,
     ) -> None:
         """Initialize the sandbox with specific Deno permissions.
 
@@ -155,20 +156,22 @@ class BasePyodideSandbox:
 
             node_modules_dir: Directory for Node.js modules. Set to "auto" to use
                 the default directory for Deno modules.
+            skip_deno_check: If True, skip the check for Deno installation.
         """
         self.stateful = stateful
         # Configure permissions
         self.permissions = []
 
-        # Check if Deno is installed
-        try:
-            subprocess.run(["deno", "--version"], check=True, capture_output=True)  # noqa: S607, S603
-        except subprocess.CalledProcessError as e:
-            msg = "Deno is installed, but running it failed."
-            raise RuntimeError(msg) from e
-        except FileNotFoundError as e:
-            msg = "Deno is not installed or not in PATH."
-            raise RuntimeError(msg) from e
+        if not skip_deno_check:
+            # Check if Deno is installed
+            try:
+                subprocess.run(["deno", "--version"], check=True, capture_output=True)  # noqa: S607, S603
+            except subprocess.CalledProcessError as e:
+                msg = "Deno is installed, but running it failed."
+                raise RuntimeError(msg) from e
+            except FileNotFoundError as e:
+                msg = "Deno is not installed or not in PATH."
+                raise RuntimeError(msg) from e
 
         # Define permission configurations:
         # each tuple contains (flag, setting, defaults)
@@ -578,9 +581,9 @@ class SyncPyodideSandbox(BasePyodideSandbox):
         """
         start_time = time.time()
         stdout = ""
-        stderr = ""
         result = None
-        status: Literal["success", "error"] = "success"
+        stderr: str
+        status: Literal["success", "error"]
 
         cmd = self._build_command(
             code,
@@ -591,7 +594,10 @@ class SyncPyodideSandbox(BasePyodideSandbox):
 
         try:
             # Run the subprocess with timeout
-            process = subprocess.run(
+            # Ignoring S603 for subprocess.run as the cmd is built safely.
+            # Untrusted input comes from `code` parameter, which should be
+            # escaped properly as we are **not** using shell=True.
+            process = subprocess.run(  # noqa: S603
                 cmd,
                 capture_output=True,
                 text=False,  # Keep as bytes for proper decoding
