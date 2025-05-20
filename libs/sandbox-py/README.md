@@ -1,4 +1,3 @@
-````python
 # 🛡️ LangChain Sandbox
 
 > A secure environment for running Python code using Pyodide (WebAssembly) and Deno
@@ -201,5 +200,3 @@ The sandbox consists of two main components:
 
 - **`pyodide-sandbox-js`**: JavaScript/TypeScript module using Deno to provide the core sandboxing functionality.
 - **`sandbox-py`**: Contains `PyodideSandbox` which just wraps the JavaScript/TypeScript module and executes it as a subprocess.
-
-````
