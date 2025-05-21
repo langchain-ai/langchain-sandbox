@@ -1,6 +1,6 @@
 {
-  "name": "@eyurtsev/pyodide-sandbox",
-  "version": "0.0.3",
+  "name": "@langchain/pyodide-sandbox",
+  "version": "0.0.4",
   "license": "MIT",
   "description": "CLI for running sandboxed Python code using Pyodide",
   "exports": "./main.ts",
