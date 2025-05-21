@@ -34,6 +34,11 @@ LangChain Sandbox provides a secure environment for executing untrusted Python c
 
 ## 💡 Example Usage
 
+
+> [!warning]
+> Use `alllow_net` to limit the network requests that can be made by the sandboxed code to avoid SSRF attacks
+> https://docs.deno.com/runtime/fundamentals/security/#network-access
+
 ```python
 from langchain_sandbox import PyodideSandbox
 
