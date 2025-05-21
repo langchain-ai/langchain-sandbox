@@ -347,212 +347,10 @@ class PyodideSandbox(BasePyodideSandbox):
         )
 
 
-class PyodideSandboxTool(BaseTool):
-    """Tool for running python code in a PyodideSandbox.
-
-    If you use a stateful sandbox (PyodideSandboxTool(stateful=True)),
-    the state between code executions (to variables, imports,
-    and definitions, etc.), will be persisted using LangGraph checkpointer.
-
-    !!! important
-        When you use a stateful sandbox, this tool can only be used
-        inside a LangGraph graph with a checkpointer, and
-        has to be used with the prebuilt `create_react_agent` or `ToolNode`.
-
-    Example: stateless sandbox usage
-
-        ```python
-        from langgraph.prebuilt import create_react_agent
-        from langchain_sandbox import PyodideSandboxTool
-
-        tool = PyodideSandboxTool(allow_net=True)
-        agent = create_react_agent(
-            "anthropic:claude-3-7-sonnet-latest",
-            tools=[tool],
-        )
-        result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": "what's 5 + 7?"}]},
-        )
-        ```
-
-    Example: stateful sandbox usage
-
-        ```python
-        from langgraph.prebuilt import create_react_agent
-        from langgraph.prebuilt.chat_agent_executor import AgentState
-        from langgraph.checkpoint.memory import InMemorySaver
-        from langchain_sandbox import PyodideSandboxTool, PyodideSandbox
-
-        class State(AgentState):
-            session_bytes: bytes
-            session_metadata: dict
-
-        tool = PyodideSandboxTool(stateful=True, allow_net=True)
-        agent = create_react_agent(
-            "anthropic:claude-3-7-sonnet-latest",
-            tools=[tool],
-            checkpointer=InMemorySaver(),
-            state_schema=State
-        )
-        result = await agent.ainvoke(
-            {
-                "messages": [
-                    {"role": "user", "content": "what's 5 + 7? save result as 'a'"}
-                ],
-                "session_bytes": None,
-                "session_metadata": None
-            },
-            config={"configurable": {"thread_id": "123"}},
-        )
-        second_result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": "what's the sine of 'a'?"}]},
-            config={"configurable": {"thread_id": "123"}},
-        )
-        ```
-    """
-
-    name: str = "python_code_sandbox"
-    description: str = (
-        "A secure Python code sandbox. Use this to execute python commands.\n"
-        "- Input should be a valid python command.\n"
-        "- To return output, you should print it out with `print(...)`.\n"
-        "- Don't use f-strings when printing outputs.\n"
-        "- If you need to make web requests, use `httpx.AsyncClient`."
-    )
-
-    # Mirror the PyodideSandbox constructor arguments
-    stateful: bool = False
-    allow_env: list[str] | bool = False
-    allow_read: list[str] | bool = False
-    allow_write: list[str] | bool = False
-    allow_net: list[str] | bool = False
-    allow_run: list[str] | bool = False
-    allow_ffi: list[str] | bool = False
-    node_modules_dir: str = "auto"
-
-    _sandbox: PyodideSandbox
-
-    def __init__(self, **kwargs: dict[str, Any]) -> None:
-        """Initialize the tool."""
-        super().__init__(**kwargs)
-
-        if self.stateful:
-            try:
-                from langgraph.prebuilt import InjectedState
-            except ImportError as e:
-                error_msg = (
-                    "The 'langgraph' package is required when using a stateful sandbox."
-                    " Please install it with 'pip install langgraph'."
-                )
-                raise ImportError(error_msg) from e
-
-            class PyodideSandboxToolInput(BaseModel):
-                """Python code to execute in the sandbox."""
-
-                code: str = Field(description="Code to execute.")
-                # these fields will be ignored by the LLM
-                # and automatically injected by LangGraph's ToolNode
-                state: Annotated[dict[str, Any] | BaseModel, InjectedState]
-                tool_call_id: Annotated[str, InjectedToolCallId]
-
-        else:
-
-            class PyodideSandboxToolInput(BaseModel):
-                """Python code to execute in the sandbox."""
-
-                code: str = Field(description="Code to execute.")
-
-        self.args_schema: type[BaseModel] = PyodideSandboxToolInput
-        self._sandbox = PyodideSandbox(
-            stateful=self.stateful,
-            allow_env=self.allow_env,
-            allow_read=self.allow_read,
-            allow_write=self.allow_write,
-            allow_net=self.allow_net,
-            allow_run=self.allow_run,
-            allow_ffi=self.allow_ffi,
-            node_modules_dir=self.node_modules_dir,
-        )
-
-    def _run(
-        self,
-        code: str,
-        state: dict[str, Any] | BaseModel | None = None,
-        tool_call_id: str | None = None,
-        config: RunnableConfig | None = None,
-        run_manager: CallbackManagerForToolRun | None = None,
-    ) -> Any:  # noqa: ANN401
-        """Use the tool."""
-        error_msg = (
-            "Sync invocation of PyodideSandboxTool is not supported - "
-            "please invoke the tool asynchronously using `await tool.ainvoke()`"
-        )
-        raise NotImplementedError(error_msg)
-
-    async def _arun(
-        self,
-        code: str,
-        state: dict[str, Any] | BaseModel | None = None,
-        tool_call_id: str | None = None,
-        config: RunnableConfig | None = None,
-        run_manager: AsyncCallbackManagerForToolRun | None = None,
-    ) -> Any:  # noqa: ANN401
-        """Use the tool asynchronously."""
-        if self.stateful:
-            required_keys = {"session_bytes", "session_metadata", "messages"}
-            actual_keys = set(state) if isinstance(state, dict) else set(state.__dict__)
-            if missing_keys := required_keys - actual_keys:
-                error_msg = (
-                    "Input state is missing "
-                    f"the following required keys: {missing_keys}"
-                )
-                raise ValueError(error_msg)
-
-            if isinstance(state, dict):
-                session_bytes = state["session_bytes"]
-                session_metadata = state["session_metadata"]
-            else:
-                session_bytes = state.session_bytes
-                session_metadata = state.session_metadata
-
-            result = await self._sandbox.execute(
-                code, session_bytes=session_bytes, session_metadata=session_metadata
-            )
-        else:
-            result = await self._sandbox.execute(code)
-
-        if result.stderr:
-            tool_result = f"Error during execution: {result.stderr}"
-        else:
-            tool_result = result.stdout
-
-        if self.stateful:
-            from langgraph.types import Command
-
-            # if the tool is used with a stateful sandbox,
-            # we need to update the graph state with the new session bytes and metadata
-            return Command(
-                update={
-                    "session_bytes": result.session_bytes,
-                    "session_metadata": result.session_metadata,
-                    "messages": [
-                        ToolMessage(
-                            content=tool_result,
-                            tool_call_id=tool_call_id,
-                        )
-                    ],
-                }
-            )
-
-        return tool_result
-
-
 class SyncPyodideSandbox(BasePyodideSandbox):
     """Synchronous version of PyodideSandbox.
 
     This class provides a synchronous interface to the PyodideSandbox functionality.
-    It inherits all the security features and configuration options from
-    BasePyodideSandbox but provides a blocking execute() method.
     """
 
     def execute(
@@ -643,3 +441,298 @@ class SyncPyodideSandbox(BasePyodideSandbox):
             session_metadata=session_metadata,
             session_bytes=session_bytes,
         )
+
+
+class PyodideSandboxTool(BaseTool):
+    """Tool for running python code in a PyodideSandbox.
+
+    If you use a stateful sandbox (PyodideSandboxTool(stateful=True)),
+    the state between code executions (to variables, imports,
+    and definitions, etc.), will be persisted using LangGraph checkpointer.
+
+    !!! important
+        When you use a stateful sandbox, this tool can only be used
+        inside a LangGraph graph with a checkpointer, and
+        has to be used with the prebuilt `create_react_agent` or `ToolNode`.
+
+    Example: stateless sandbox usage
+
+        ```python
+        from langgraph.prebuilt import create_react_agent
+        from langchain_sandbox import PyodideSandboxTool
+
+        tool = PyodideSandboxTool(allow_net=True)
+        agent = create_react_agent(
+            "anthropic:claude-3-7-sonnet-latest",
+            tools=[tool],
+        )
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": "what's 5 + 7?"}]},
+        )
+        ```
+
+    Example: stateful sandbox usage
+
+        ```python
+        from langgraph.prebuilt import create_react_agent
+        from langgraph.prebuilt.chat_agent_executor import AgentState
+        from langgraph.checkpoint.memory import InMemorySaver
+        from langchain_sandbox import PyodideSandboxTool, PyodideSandbox
+
+        class State(AgentState):
+            session_bytes: bytes
+            session_metadata: dict
+
+        tool = PyodideSandboxTool(stateful=True, allow_net=True)
+        agent = create_react_agent(
+            "anthropic:claude-3-7-sonnet-latest",
+            tools=[tool],
+            checkpointer=InMemorySaver(),
+            state_schema=State
+        )
+        result = await agent.ainvoke(
+            {
+                "messages": [
+                    {"role": "user", "content": "what's 5 + 7? save result as 'a'"}
+                ],
+                "session_bytes": None,
+                "session_metadata": None
+            },
+            config={"configurable": {"thread_id": "123"}},
+        )
+        second_result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": "what's the sine of 'a'?"}]},
+            config={"configurable": {"thread_id": "123"}},
+        )
+        ```
+    """
+
+    name: str = "python_code_sandbox"
+    description: str = (
+        "A secure Python code sandbox. Use this to execute python commands.\n"
+        "- Input should be a valid python command.\n"
+        "- To return output, you should print it out with `print(...)`.\n"
+        "- Don't use f-strings when printing outputs.\n"
+        "- If you need to make web requests, use `httpx.AsyncClient`."
+    )
+
+    # Mirror the PyodideSandbox constructor arguments
+    stateful: bool = False
+    allow_env: list[str] | bool = False
+    allow_read: list[str] | bool = False
+    allow_write: list[str] | bool = False
+    allow_net: list[str] | bool = False
+    allow_run: list[str] | bool = False
+    allow_ffi: list[str] | bool = False
+    timeout_seconds: float | None
+    """Timeout for code execution in seconds. By default set to 60 seconds."""
+    node_modules_dir: str = "auto"
+
+    _sandbox: PyodideSandbox
+    _sync_sandbox: SyncPyodideSandbox
+
+    def __init__(
+        self,
+        *,
+        stateful: bool = False,
+        timeout_seconds: float | None = 60,
+        allow_net: list[str] | bool = False,
+        **kwargs: dict[str, Any],
+    ) -> None:
+        """Initialize the tool.
+
+        Args:
+            stateful: Whether to use a stateful sandbox. If True, `sandbox.execute`
+                will include session metadata and the session bytes containing the
+                session state (variables, imports, etc.) in the execution result.
+                This allows saving and reusing the session state between executions.
+            timeout_seconds: Timeout for code execution in seconds.
+            allow_net: configure network access. If setting to True, any network access
+                is allowed, including potentially internal network addresses that you
+                may not want to expose to a malicious actor.
+                Depending on your use case, you can restrict the network access to
+                only the URLs you need (e.g., required to set up micropip / pyodide).
+                Please refer to pyodide documentation for more details.
+            **kwargs: Other attributes will be passed to the PyodideSandbox
+        """
+        super().__init__(
+            stateful=stateful,
+            timeout_seconds=timeout_seconds,
+            allow_net=allow_net,
+            **kwargs,
+        )
+
+        if self.stateful:
+            try:
+                from langgraph.prebuilt import InjectedState
+            except ImportError as e:
+                error_msg = (
+                    "The 'langgraph' package is required when using a stateful sandbox."
+                    " Please install it with 'pip install langgraph'."
+                )
+                raise ImportError(error_msg) from e
+
+            class PyodideSandboxToolInput(BaseModel):
+                """Python code to execute in the sandbox."""
+
+                code: str = Field(description="Code to execute.")
+                # these fields will be ignored by the LLM
+                # and automatically injected by LangGraph's ToolNode
+                state: Annotated[dict[str, Any] | BaseModel, InjectedState]
+                tool_call_id: Annotated[str, InjectedToolCallId]
+
+        else:
+
+            class PyodideSandboxToolInput(BaseModel):
+                """Python code to execute in the sandbox."""
+
+                code: str = Field(description="Code to execute.")
+
+        self.args_schema: type[BaseModel] = PyodideSandboxToolInput
+        self._sandbox = PyodideSandbox(
+            stateful=self.stateful,
+            allow_env=self.allow_env,
+            allow_read=self.allow_read,
+            allow_write=self.allow_write,
+            allow_net=self.allow_net,
+            allow_run=self.allow_run,
+            allow_ffi=self.allow_ffi,
+            node_modules_dir=self.node_modules_dir,
+        )
+        # Initialize sync sandbox with deno check skipped since async sandbox already
+        # checked
+        self._sync_sandbox = SyncPyodideSandbox(
+            stateful=self.stateful,
+            allow_env=self.allow_env,
+            allow_read=self.allow_read,
+            allow_write=self.allow_write,
+            allow_net=self.allow_net,
+            allow_run=self.allow_run,
+            allow_ffi=self.allow_ffi,
+            node_modules_dir=self.node_modules_dir,
+            skip_deno_check=True,  # Skip deno check since async sandbox already checked
+        )
+
+    def _run(
+        self,
+        code: str,
+        state: dict[str, Any] | BaseModel | None = None,
+        tool_call_id: str | None = None,
+        config: RunnableConfig | None = None,
+        run_manager: CallbackManagerForToolRun | None = None,
+    ) -> Any:  # noqa: ANN401
+        """Use the tool synchronously."""
+        if self.stateful:
+            required_keys = {"session_bytes", "session_metadata", "messages"}
+            actual_keys = set(state) if isinstance(state, dict) else set(state.__dict__)
+            if missing_keys := required_keys - actual_keys:
+                error_msg = (
+                    "Input state is missing "
+                    f"the following required keys: {missing_keys}"
+                )
+                raise ValueError(error_msg)
+
+            if isinstance(state, dict):
+                session_bytes = state["session_bytes"]
+                session_metadata = state["session_metadata"]
+            else:
+                session_bytes = state.session_bytes
+                session_metadata = state.session_metadata
+
+            result = self._sync_sandbox.execute(
+                code,
+                session_bytes=session_bytes,
+                session_metadata=session_metadata,
+                timeout_seconds=self.timeout_seconds,
+            )
+        else:
+            result = self._sync_sandbox.execute(
+                code, timeout_seconds=self.timeout_seconds
+            )
+
+        if result.stderr:
+            tool_result = f"Error during execution: {result.stderr}"
+        else:
+            tool_result = result.stdout
+
+        if self.stateful:
+            from langgraph.types import Command
+
+            # if the tool is used with a stateful sandbox,
+            # we need to update the graph state with the new session bytes and metadata
+            return Command(
+                update={
+                    "session_bytes": result.session_bytes,
+                    "session_metadata": result.session_metadata,
+                    "messages": [
+                        ToolMessage(
+                            content=tool_result,
+                            tool_call_id=tool_call_id,
+                        )
+                    ],
+                }
+            )
+
+        return tool_result
+
+    async def _arun(
+        self,
+        code: str,
+        state: dict[str, Any] | BaseModel | None = None,
+        tool_call_id: str | None = None,
+        config: RunnableConfig | None = None,
+        run_manager: AsyncCallbackManagerForToolRun | None = None,
+    ) -> Any:  # noqa: ANN401
+        """Use the tool synchronously."""
+        if self.stateful:
+            required_keys = {"session_bytes", "session_metadata", "messages"}
+            actual_keys = set(state) if isinstance(state, dict) else set(state.__dict__)
+            if missing_keys := required_keys - actual_keys:
+                error_msg = (
+                    "Input state is missing "
+                    f"the following required keys: {missing_keys}"
+                )
+                raise ValueError(error_msg)
+
+            if isinstance(state, dict):
+                session_bytes = state["session_bytes"]
+                session_metadata = state["session_metadata"]
+            else:
+                session_bytes = state.session_bytes
+                session_metadata = state.session_metadata
+
+            result = await self._sandbox.execute(
+                code,
+                session_bytes=session_bytes,
+                session_metadata=session_metadata,
+                timeout_seconds=self.timeout_seconds,
+            )
+        else:
+            result = await self._sandbox.execute(
+                code, timeout_seconds=self.timeout_seconds
+            )
+
+        if result.stderr:
+            tool_result = f"Error during execution: {result.stderr}"
+        else:
+            tool_result = result.stdout
+
+        if self.stateful:
+            from langgraph.types import Command
+
+            # if the tool is used with a stateful sandbox,
+            # we need to update the graph state with the new session bytes and metadata
+            return Command(
+                update={
+                    "session_bytes": result.session_bytes,
+                    "session_metadata": result.session_metadata,
+                    "messages": [
+                        ToolMessage(
+                            content=tool_result,
+                            tool_call_id=tool_call_id,
+                        )
+                    ],
+                }
+            )
+
+        return tool_result
