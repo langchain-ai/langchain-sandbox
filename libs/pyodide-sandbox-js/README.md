@@ -13,13 +13,13 @@ No installation needed! Run directly using Deno with JSR.
 Run a simple Python statement:
 
 ```shell
-deno run -A jsr:@eyurtsev/pyodide-sandbox -c "print('Hello, World!')"
+deno run -A jsr:@langchain/pyodide-sandbox -c "print('Hello, World!')"
 ```
 
 Run calculations and get results:
 
 ```shell
-deno run -A jsr:@eyurtsev/pyodide-sandbox -c "result = 2 + 2; print(f'2 + 2 = {result}')"
+deno run -A jsr:@langchain/pyodide-sandbox -c "result = 2 + 2; print(f'2 + 2 = {result}')"
 ```
 
 ### Using External Packages
@@ -27,7 +27,7 @@ deno run -A jsr:@eyurtsev/pyodide-sandbox -c "result = 2 + 2; print(f'2 + 2 = {r
 Imports will be automatically detected and installed using micropip if possible:
 
 ```shell
-deno run -A jsr:@eyurtsev/pyodide-sandbox -c "import numpy as np; x = np.ones((3, 3)); print(x)"
+deno run -A jsr:@langchain/pyodide-sandbox -c "import numpy as np; x = np.ones((3, 3)); print(x)"
 ```
 
 ### Stateful Sessions
@@ -35,13 +35,13 @@ deno run -A jsr:@eyurtsev/pyodide-sandbox -c "import numpy as np; x = np.ones((3
 Create a stateful session that remembers variables:
 
 ```shell
-deno run -A jsr:@eyurtsev/pyodide-sandbox -c "import numpy as np; x = np.ones((3, 3))" -s
+deno run -A jsr:@langchain/pyodide-sandbox -c "import numpy as np; x = np.ones((3, 3))" -s
 ```
 
 Use the previous session to access variables:
 
 ```shell
-deno run -A jsr:@eyurtsev/pyodide-sandbox -c "print(x)" -s -b <session_bytes>
+deno run -A jsr:@langchain/pyodide-sandbox -c "print(x)" -s -b <session_bytes>
 ```
 
 ## Notes on Package Compatibility
