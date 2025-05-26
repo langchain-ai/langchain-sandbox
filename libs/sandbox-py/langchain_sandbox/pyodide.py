@@ -1,6 +1,7 @@
 """Python wrapper that calls pyodide & deno for code execution."""
 
 import asyncio
+import base64
 import dataclasses
 import json
 import logging
@@ -162,6 +163,8 @@ class BasePyodideSandbox:
         # Configure permissions
         self.permissions = []
 
+        self.file_operations = []
+
         if not skip_deno_check:
             # Check if Deno is installed
             try:
@@ -196,6 +199,63 @@ class BasePyodideSandbox:
                 self.permissions.append(perm)
 
         self.permissions.append(f"--node-modules-dir={node_modules_dir}")
+
+    def attach_file(self, path: str, content: str | bytes) -> None:
+        """Attach a file to the sandbox filesystem.
+
+        The file will be created in the sandbox's memfs filesystem and will be
+        available to the Python code when executed. Binary content is automatically
+        detected based on content type.
+
+        Args:
+            path: Path in the sandbox filesystem where the file should be created.
+                 If not starting with '/sandbox/', it will be prefixed automatically.
+            content: The content of the file, either as a string or bytes.
+                    If bytes are provided, it will be treated as binary data.
+        """
+        binary = isinstance(content, bytes)
+
+        if not path.startswith("/sandbox/"):
+            path = f"/sandbox/{path}"
+
+        encoding = "binary" if binary else "utf-8"
+
+        if binary:
+            content = base64.b64encode(content).decode("ascii")
+
+        self.file_operations.append({
+            "operation": "write",
+            "path": path,
+            "content": content,
+            "encoding": encoding
+        })
+
+    def attach_files(
+        self, files: dict[str, str | bytes | dict[str, str | bool]]
+    ) -> None:
+        """Attach multiple files to the sandbox filesystem.
+
+        Args:
+            files: Dictionary mapping paths to file contents.
+                  Each value can be:
+                  - a string (treated as text content)
+                  - bytes (treated as binary content)
+                  - a dictionary with 'content' key (and optional 'binary' key
+                    if explicit format control is needed)
+        """
+        for path, content_info in files.items():
+            if isinstance(content_info, (str, bytes)):
+                self.attach_file(path, content_info)
+            elif isinstance(content_info, dict):
+                content = content_info.get("content", "")
+
+                if "binary" in content_info:
+                    binary_flag = content_info.get("binary", False)
+                    if isinstance(content, str) and binary_flag:
+                        # Convert string to bytes when binary flag is True
+                        content = content.encode("utf-8")
+
+                self.attach_file(path, content)
 
     def _build_command(
         self,
@@ -245,6 +305,10 @@ class BasePyodideSandbox:
         if session_metadata:
             cmd.extend(["-m", json.dumps(session_metadata)])
 
+        # Add filesystem operations if there are any
+        if self.file_operations:
+            cmd.extend(["--fs-operations", json.dumps(self.file_operations)])
+
         return cmd
 
 
@@ -263,6 +327,7 @@ class PyodideSandbox(BasePyodideSandbox):
         session_metadata: dict | None = None,
         timeout_seconds: float | None = None,
         memory_limit_mb: int | None = None,
+        clear_files: bool = False,
     ) -> CodeExecutionResult:
         """Execute Python code asynchronously in a sandboxed Deno subprocess.
 
@@ -277,6 +342,7 @@ class PyodideSandbox(BasePyodideSandbox):
             session_metadata: Optional metadata for session state
             timeout_seconds: Maximum execution time in seconds
             memory_limit_mb: Maximum memory usage in MB
+            clear_files: If True, clear the attached files after execution
 
         Returns:
             CodeExecutionResult containing execution results and metadata
@@ -287,53 +353,58 @@ class PyodideSandbox(BasePyodideSandbox):
         result = None
         status: Literal["success", "error"] = "success"
 
-        cmd = self._build_command(
-            code,
-            session_bytes=session_bytes,
-            session_metadata=session_metadata,
-            memory_limit_mb=memory_limit_mb,
-        )
-
-        # Create and run the subprocess
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
         try:
-            # Wait for process with a timeout
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(),
-                timeout=timeout_seconds,
+            cmd = self._build_command(
+                code,
+                session_bytes=session_bytes,
+                session_metadata=session_metadata,
+                memory_limit_mb=memory_limit_mb,
             )
-            stdout = stdout_bytes.decode("utf-8", errors="replace")
 
-            if stdout:
-                # stdout encodes the full result from the sandbox.
-                # including stdout, stderr, and the json result.
-                full_result = json.loads(stdout)
-                stdout = full_result.get("stdout", None)
-                stderr = full_result.get("stderr", None)
-                result = full_result.get("result", None)
-                status = "success" if full_result.get("success", False) else "error"
-                session_metadata = full_result.get("sessionMetadata", None)
-                # Convert the Uint8Array to Python bytes
-                session_bytes_array = full_result.get("sessionBytes", None)
-                session_bytes = (
-                    bytes(session_bytes_array) if session_bytes_array else None
+            # Create and run the subprocess
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            try:
+                # Wait for process with a timeout
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=timeout_seconds,
                 )
-            else:
-                stderr = stderr_bytes.decode("utf-8", errors="replace")
+                stdout = stdout_bytes.decode("utf-8", errors="replace")
+
+                if stdout:
+                    # stdout encodes the full result from the sandbox.
+                    # including stdout, stderr, and the json result.
+                    full_result = json.loads(stdout)
+                    stdout = full_result.get("stdout", None)
+                    stderr = full_result.get("stderr", None)
+                    result = full_result.get("result", None)
+                    status = "success" if full_result.get("success", False) else "error"
+                    session_metadata = full_result.get("sessionMetadata", None)
+                    # Convert the Uint8Array to Python bytes
+                    session_bytes_array = full_result.get("sessionBytes", None)
+                    session_bytes = (
+                        bytes(session_bytes_array) if session_bytes_array else None
+                    )
+                else:
+                    stderr = stderr_bytes.decode("utf-8", errors="replace")
+                    status = "error"
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
                 status = "error"
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            status = "error"
-            stderr = f"Execution timed out after {timeout_seconds} seconds"
-        except asyncio.CancelledError:
-            # Optionally: log cancellation if needed
-            pass
+                stderr = f"Execution timed out after {timeout_seconds} seconds"
+            except asyncio.CancelledError:
+                # Optionally: log cancellation if needed
+                pass
+        finally:
+            if clear_files:
+                self.file_operations = []
+
         end_time = time.time()
 
         return CodeExecutionResult(
@@ -361,6 +432,7 @@ class SyncPyodideSandbox(BasePyodideSandbox):
         session_metadata: dict | None = None,
         timeout_seconds: float | None = None,
         memory_limit_mb: int | None = None,
+        clear_files: bool = False,
     ) -> CodeExecutionResult:
         """Execute Python code synchronously in a sandboxed Deno subprocess.
 
@@ -373,6 +445,7 @@ class SyncPyodideSandbox(BasePyodideSandbox):
             session_metadata: Optional metadata for session state
             timeout_seconds: Maximum execution time in seconds
             memory_limit_mb: Maximum memory usage in MB
+            clear_files: If True, clear the attached files after execution
 
         Returns:
             CodeExecutionResult containing execution results and metadata
@@ -383,14 +456,14 @@ class SyncPyodideSandbox(BasePyodideSandbox):
         stderr: str
         status: Literal["success", "error"]
 
-        cmd = self._build_command(
-            code,
-            session_bytes=session_bytes,
-            session_metadata=session_metadata,
-            memory_limit_mb=memory_limit_mb,
-        )
-
         try:
+            cmd = self._build_command(
+                code,
+                session_bytes=session_bytes,
+                session_metadata=session_metadata,
+                memory_limit_mb=memory_limit_mb,
+            )
+
             # Run the subprocess with timeout
             # Ignoring S603 for subprocess.run as the cmd is built safely.
             # Untrusted input comes from `code` parameter, which should be
@@ -429,6 +502,9 @@ class SyncPyodideSandbox(BasePyodideSandbox):
         except subprocess.TimeoutExpired:
             status = "error"
             stderr = f"Execution timed out after {timeout_seconds} seconds"
+        finally:
+            if clear_files:
+                self.file_operations = []
 
         end_time = time.time()
 
@@ -444,68 +520,7 @@ class SyncPyodideSandbox(BasePyodideSandbox):
 
 
 class PyodideSandboxTool(BaseTool):
-    """Tool for running python code in a PyodideSandbox.
-
-    If you use a stateful sandbox (PyodideSandboxTool(stateful=True)),
-    the state between code executions (to variables, imports,
-    and definitions, etc.), will be persisted using LangGraph checkpointer.
-
-    !!! important
-        When you use a stateful sandbox, this tool can only be used
-        inside a LangGraph graph with a checkpointer, and
-        has to be used with the prebuilt `create_react_agent` or `ToolNode`.
-
-    Example: stateless sandbox usage
-
-        ```python
-        from langgraph.prebuilt import create_react_agent
-        from langchain_sandbox import PyodideSandboxTool
-
-        tool = PyodideSandboxTool(allow_net=True)
-        agent = create_react_agent(
-            "anthropic:claude-3-7-sonnet-latest",
-            tools=[tool],
-        )
-        result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": "what's 5 + 7?"}]},
-        )
-        ```
-
-    Example: stateful sandbox usage
-
-        ```python
-        from langgraph.prebuilt import create_react_agent
-        from langgraph.prebuilt.chat_agent_executor import AgentState
-        from langgraph.checkpoint.memory import InMemorySaver
-        from langchain_sandbox import PyodideSandboxTool, PyodideSandbox
-
-        class State(AgentState):
-            session_bytes: bytes
-            session_metadata: dict
-
-        tool = PyodideSandboxTool(stateful=True, allow_net=True)
-        agent = create_react_agent(
-            "anthropic:claude-3-7-sonnet-latest",
-            tools=[tool],
-            checkpointer=InMemorySaver(),
-            state_schema=State
-        )
-        result = await agent.ainvoke(
-            {
-                "messages": [
-                    {"role": "user", "content": "what's 5 + 7? save result as 'a'"}
-                ],
-                "session_bytes": None,
-                "session_metadata": None
-            },
-            config={"configurable": {"thread_id": "123"}},
-        )
-        second_result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": "what's the sine of 'a'?"}]},
-            config={"configurable": {"thread_id": "123"}},
-        )
-        ```
-    """
+    """Tool for running python code in a PyodideSandbox."""
 
     name: str = "python_code_sandbox"
     description: str = (
@@ -613,6 +628,39 @@ class PyodideSandboxTool(BaseTool):
             skip_deno_check=True,  # Skip deno check since async sandbox already checked
         )
 
+    def attach_file(self, path: str, content: str | bytes) -> None:
+        """Attach a file to the sandbox filesystem.
+
+        This method delegates to both the async and sync sandboxes to ensure consistency
+        Binary content is automatically detected based on the content type.
+
+        Args:
+            path: Path in the sandbox filesystem where the file should be created.
+                 If not starting with '/sandbox/', it will be prefixed automatically.
+            content: The content of the file, either as a string or bytes.
+                    If bytes are provided, it will be treated as binary data.
+        """
+        self._sandbox.attach_file(path, content)
+        self._sync_sandbox.attach_file(path, content)
+
+    def attach_files(
+            self, files: dict[str, str | bytes | dict[str, str | bool]]
+        ) -> None:
+        """Attach multiple files to the sandbox filesystem.
+
+        This method delegates to both the async and sync sandboxes to ensure consistency
+
+        Args:
+            files: Dictionary mapping paths to file contents.
+                  Each value can be:
+                  - a string (treated as text content)
+                  - bytes (treated as binary content)
+                  - a dictionary with 'content' key (and optional 'binary' key
+                    if explicit format control is needed)
+        """
+        self._sandbox.attach_files(files)
+        self._sync_sandbox.attach_files(files)
+
     def _run(
         self,
         code: str,
@@ -683,7 +731,7 @@ class PyodideSandboxTool(BaseTool):
         config: RunnableConfig | None = None,
         run_manager: AsyncCallbackManagerForToolRun | None = None,
     ) -> Any:  # noqa: ANN401
-        """Use the tool synchronously."""
+        """Use the tool asynchronously."""
         if self.stateful:
             required_keys = {"session_bytes", "session_metadata", "messages"}
             actual_keys = set(state) if isinstance(state, dict) else set(state.__dict__)
