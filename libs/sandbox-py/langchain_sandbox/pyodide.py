@@ -520,7 +520,68 @@ class SyncPyodideSandbox(BasePyodideSandbox):
 
 
 class PyodideSandboxTool(BaseTool):
-    """Tool for running python code in a PyodideSandbox."""
+    """Tool for running python code in a PyodideSandbox.
+
+    If you use a stateful sandbox (PyodideSandboxTool(stateful=True)),
+    the state between code executions (to variables, imports,
+    and definitions, etc.), will be persisted using LangGraph checkpointer.
+
+    !!! important
+        When you use a stateful sandbox, this tool can only be used
+        inside a LangGraph graph with a checkpointer, and
+        has to be used with the prebuilt `create_react_agent` or `ToolNode`.
+
+    Example: stateless sandbox usage
+
+        ```python
+        from langgraph.prebuilt import create_react_agent
+        from langchain_sandbox import PyodideSandboxTool
+
+        tool = PyodideSandboxTool(allow_net=True)
+        agent = create_react_agent(
+            "anthropic:claude-3-7-sonnet-latest",
+            tools=[tool],
+        )
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": "what's 5 + 7?"}]},
+        )
+        ```
+
+    Example: stateful sandbox usage
+
+        ```python
+        from langgraph.prebuilt import create_react_agent
+        from langgraph.prebuilt.chat_agent_executor import AgentState
+        from langgraph.checkpoint.memory import InMemorySaver
+        from langchain_sandbox import PyodideSandboxTool, PyodideSandbox
+
+        class State(AgentState):
+            session_bytes: bytes
+            session_metadata: dict
+
+        tool = PyodideSandboxTool(stateful=True, allow_net=True)
+        agent = create_react_agent(
+            "anthropic:claude-3-7-sonnet-latest",
+            tools=[tool],
+            checkpointer=InMemorySaver(),
+            state_schema=State
+        )
+        result = await agent.ainvoke(
+            {
+                "messages": [
+                    {"role": "user", "content": "what's 5 + 7? save result as 'a'"}
+                ],
+                "session_bytes": None,
+                "session_metadata": None
+            },
+            config={"configurable": {"thread_id": "123"}},
+        )
+        second_result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": "what's the sine of 'a'?"}]},
+            config={"configurable": {"thread_id": "123"}},
+        )
+        ```
+    """
 
     name: str = "python_code_sandbox"
     description: str = (
