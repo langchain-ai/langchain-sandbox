@@ -353,13 +353,14 @@ class PyodideSandbox(BasePyodideSandbox):
         result = None
         status: Literal["success", "error"] = "success"
 
-        try:
-            cmd = self._build_command(
+        cmd = self._build_command(
                 code,
                 session_bytes=session_bytes,
                 session_metadata=session_metadata,
                 memory_limit_mb=memory_limit_mb,
             )
+
+        try:
 
             # Create and run the subprocess
             process = await asyncio.create_subprocess_exec(
