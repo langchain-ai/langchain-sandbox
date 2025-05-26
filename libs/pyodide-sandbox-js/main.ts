@@ -1,3 +1,7 @@
+// Parts of this code were adapted from
+// https://github.com/alexmojaki/pyodide-worker-runner/blob/master/lib/pyodide_worker_runner.py
+// and
+// https://github.com/pydantic/pydantic-ai/blob/main/mcp-run-python/src/runCode.ts
 import { loadPyodide } from "pyodide";
 import { join } from "@std/path";
 import { parseArgs } from "@std/cli/parse-args";
