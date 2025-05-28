@@ -86,7 +86,7 @@ class FileSystemOperation:
 
 # Published package name
 PKG_NAME = "jsr:@langchain/pyodide-sandbox@0.0.4"
-
+#PKG_NAME = "../pyodide-sandbox-js/main.ts"  # noqa: ERA001
 
 def build_permission_flag(
     flag: str,
@@ -814,7 +814,6 @@ class PyodideSandboxTool(BaseTool):
 
                 code: str = Field(description="Code to execute.")
 
-        # CORREÇÃO: Seguir exatamente o padrão da main_lib
         super().__init__(
             stateful=stateful,
             timeout_seconds=timeout_seconds,

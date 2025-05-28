@@ -52,6 +52,49 @@ def get_default_sync_sandbox(stateful: bool = False) -> SyncPyodideSandbox:
         allow_ffi=False,
     )
 
+def test_pyodide_sandbox_tool() -> None:
+    """Test synchronous invocation of PyodideSandboxTool."""
+    tool = PyodideSandboxTool(
+        enable_filesystem=True,
+        allow_net=True,
+    )
+    result = tool.invoke("x = 5; print(x)")
+    assert result == "5"
+    result = tool.invoke("x = 5; print(1); print(2)")
+    assert result == "1\n2"
+
+
+def test_pyodide_timeout() -> None:
+    """Test synchronous invocation of PyodideSandboxTool with timeout."""
+    tool = PyodideSandboxTool(
+        enable_filesystem=True,
+        allow_net=True,
+    )
+    result = tool.invoke("while True: pass")
+    assert result == "Error during execution: Execution timed out after 0.1 seconds"
+
+
+async def test_async_pyodide_sandbox_tool() -> None:
+    """Test synchronous invocation of PyodideSandboxTool."""
+    tool = PyodideSandboxTool(
+        enable_filesystem=True,
+        allow_net=True,
+    )
+    result = await tool.ainvoke("x = 5; print(x)")
+    assert result == "5"
+    result = await tool.ainvoke("x = 5; print(1); print(2)")
+    assert result == "1\n2"
+
+
+async def test_async_pyodide_timeout() -> None:
+    """Test synchronous invocation of PyodideSandboxTool with timeout."""
+    tool = PyodideSandboxTool(
+        enable_filesystem=True,
+        allow_net=True,
+    )
+    result = await tool.ainvoke("while True: pass")
+    assert result == "Error during execution: Execution timed out after 0.1 seconds"
+
 
 async def test_stdout_sessionless(pyodide_package: None) -> None:
     """Test without a session ID."""
