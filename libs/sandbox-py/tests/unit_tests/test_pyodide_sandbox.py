@@ -56,6 +56,7 @@ def get_default_sync_sandbox(stateful: bool = False) -> SyncPyodideSandbox:
         allow_ffi=False,
     )
 
+
 def test_pyodide_sandbox_tool() -> None:
     """Test synchronous invocation of PyodideSandboxTool."""
     tool = PyodideSandboxTool(

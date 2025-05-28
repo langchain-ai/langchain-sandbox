@@ -355,9 +355,7 @@ class BasePyodideSandbox:
             List of file paths that will be available in the sandbox filesystem
         """
         return [
-            op.path
-            for op in self._filesystem_operations
-            if op.operation == "write"
+            op.path for op in self._filesystem_operations if op.operation == "write"
         ]
 
     def clear_filesystem_operations(self) -> None:
@@ -421,9 +419,7 @@ class BasePyodideSandbox:
         if self._filesystem_operations or self.enable_filesystem:
             if self._filesystem_operations:
                 fs_ops = [op.to_dict() for op in self._filesystem_operations]
-                fs_json = json.dumps(
-                    fs_ops, ensure_ascii=True, separators=(",", ":")
-                )
+                fs_json = json.dumps(fs_ops, ensure_ascii=True, separators=(",", ":"))
                 cmd.extend(["-x", fs_json])
                 logger.debug("Filesystem enabled with %d operations", len(fs_ops))
             else:
@@ -983,20 +979,14 @@ class PyodideSandboxTool(BaseTool):
             self._structured_tool = StructuredTool.from_function(
                 name=self.name,
                 description=self._build_description(),
-                func=(
-                    self._run_sync
-                    if not self.stateful
-                    else self._run_stateful_sync
-                ),
+                func=(self._run_sync if not self.stateful else self._run_stateful_sync),
                 args_schema=self.args_schema,
             )
         return self._structured_tool
 
     def _run_sync(self, code: str) -> str:
         """Synchronous execution function for non-stateful mode."""
-        result = self._sync_sandbox.execute(
-            code, timeout_seconds=self.timeout_seconds
-        )
+        result = self._sync_sandbox.execute(code, timeout_seconds=self.timeout_seconds)
 
         if result.status == "error":
             error_msg = (
@@ -1025,8 +1015,7 @@ class PyodideSandboxTool(BaseTool):
         actual_keys = set(state) if isinstance(state, dict) else set(state.__dict__)
         if missing_keys := required_keys - actual_keys:
             error_msg = (
-                "Input state is missing "
-                f"the following required keys: {missing_keys}"
+                f"Input state is missing the following required keys: {missing_keys}"
             )
             raise ValueError(error_msg)
 
