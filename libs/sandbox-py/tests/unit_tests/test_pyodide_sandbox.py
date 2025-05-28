@@ -35,6 +35,8 @@ def get_default_sandbox(stateful: bool = False) -> PyodideSandbox:
     """Get default PyodideSandbox instance for testing."""
     return PyodideSandbox(
         stateful=stateful,
+        allow_read=True,
+        allow_write=True,
         allow_net=True,
         allow_env=False,
         allow_run=False,
@@ -46,6 +48,8 @@ def get_default_sync_sandbox(stateful: bool = False) -> SyncPyodideSandbox:
     """Get default SyncPyodideSandbox instance for testing."""
     return SyncPyodideSandbox(
         stateful=stateful,
+        allow_read=True,
+        allow_write=True,
         allow_net=True,
         allow_env=False,
         allow_run=False,
