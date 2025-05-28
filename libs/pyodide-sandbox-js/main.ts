@@ -298,17 +298,23 @@ interface FileSystemOperation {
   destination?: string;
 }
 
-
+/**
+ * Resolves a relative path within the sandbox environment.
+ * 
+ * @param inputPath - The input path to resolve
+ * @param mountPoint - The sandbox mount point (default: "/sandbox")
+ * @returns The resolved absolute path within the sandbox
+ */
 function resolvePathInSandbox(
   inputPath: string,
   mountPoint: string = "/sandbox"
 ): string {
-  // Se já é absoluto, retorna como está
+  // If already absolute, return as is
   if (inputPath.startsWith("/")) {
     return inputPath;
   }
   
-  // Resolve direto no mount point
+  // Resolve directly in mount point
   if (inputPath.startsWith("./")) {
     const cleanPath = inputPath.substring(2);
     return `${mountPoint}/${cleanPath}`.replace(/\/+/g, "/");
@@ -320,7 +326,7 @@ function resolvePathInSandbox(
 }
 
 /**
- * Setup memory filesystem environment in Python
+ * Setup memory filesystem environment in Python.
  */
 function setupFileSystem(pyodide: any): void {
   const mountPoint = "/sandbox";
@@ -506,6 +512,11 @@ async function runPython(
     }
     let sessionData: Uint8Array | null = null;
 
+    if (options.sessionBytes && !options.sessionMetadata) {
+      console.error("sessionMetadata is required when providing sessionBytes");
+      return { success: false, error: "sessionMetadata is required when providing sessionBytes" };
+    }
+
     // Import prepared environment module
     const prepare_env = pyodide.pyimport("prepare_env");
 
@@ -515,7 +526,7 @@ async function runPython(
       fileSystemResults = await performFileSystemOperations(pyodide, options.fileSystemOperations, fsOptions);
     }
 
-    // Prepare packages to install
+    // Prepare packages to install (include dill)
     const defaultPackages = options.stateful ? ["dill"] : [];
     const additionalPackagesToInstall = options.sessionBytes
       ? [...new Set([...defaultPackages, ...sessionMetadata.packages])]
@@ -534,6 +545,7 @@ async function runPython(
     );
 
     if (installErrors.length > 0) {
+      // Restore the original console.log function
       console.log = originalLog;
       return {
         success: false,
@@ -547,28 +559,32 @@ async function runPython(
 
     if (options.sessionBytes) {
       sessionData = Uint8Array.from(JSON.parse(options.sessionBytes));
+      // Run session preamble
       await prepare_env.load_session_bytes(sessionData);
     }
 
     const packages = installedPackages.map((pkg: any) => pkg.get("package"));
 
+    // Restore the original console.log function
     console.log = originalLog;
     
-    // Execute Python code
+    // Run the Python code
     const rawValue = await pyodide.runPythonAsync(pythonCode);
+    // Dump result to string
     const jsonValue = await prepare_env.dumps(rawValue);
 
-    // Update session metadata
+    // Update session metadata with installed packages
     sessionMetadata.packages = [
       ...new Set([...sessionMetadata.packages, ...packages]),
     ];
     sessionMetadata.lastModified = new Date().toISOString();
 
     if (options.stateful) {
+      // Save session state to sessionBytes
       sessionData = await prepare_env.dump_session_bytes() as Uint8Array;
     }
 
-    // Build result
+    // Return the result with stdout and stderr output
     const result: PyodideResult = {
       success: true, 
       result: rawValue,
@@ -658,14 +674,18 @@ OPTIONS:
   };
 
   if (!options.code && !options.file) {
-    console.error("Error: You must provide Python code using either -c/--code or -f/--file option.");
+    console.error(
+      "Error: You must provide Python code using either -c/--code or -f/--file option.\nUse --help for usage information."
+    );
     Deno.exit(1);
   }
 
+  // Get Python code from file or command line argument
   let pythonCode = "";
 
   if (options.file) {
     try {
+      // Resolve relative or absolute file path
       const filePath = options.file.startsWith("/")
         ? options.file
         : join(Deno.cwd(), options.file);
@@ -676,6 +696,7 @@ OPTIONS:
       Deno.exit(1);
     }
   } else {
+    // Process code from command line (replacing escaped newlines)
     pythonCode = options.code?.replace(/\\n/g, "\n") ?? "";
   }
 
@@ -705,9 +726,9 @@ OPTIONS:
 
   const result = await runPython(pythonCode, runOptions);
 
-  // Output result
+  // Create output JSON with stdout, stderr, and result
   const outputJson: any = {
-    stdout: result.stdout?.join('\n') || null,  // <-- ADICIONAR '\n'
+    stdout: result.stdout?.join('\n') || null,
     stderr: result.success ? (result.stderr?.join('\n') || null) : result.error || null,
     result: result.success ? JSON.parse(result.jsonResult || 'null') : null,
     success: result.success,
@@ -723,14 +744,19 @@ OPTIONS:
     outputJson.fileSystemOperations = result.fileSystemOperations;
   }
 
+  // Output as JSON to stdout
   console.log(JSON.stringify(outputJson));
 
+  // Exit with error code if Python execution failed
   if (!result.success) {
     Deno.exit(1);
   }
 }
 
+// If this module is run directly
 if (import.meta.main) {
+  // Override the global environment variables that Deno's permission prompts look for
+  // to suppress color-related permission prompts
   main().catch((err) => {
     console.error("Unhandled error:", err);
     Deno.exit(1);

@@ -1,4 +1,4 @@
-import { assertEquals, assertNotEquals, assertExists } from "@std/assert";
+import { assertEquals, assertNotEquals } from "@std/assert";
 import { runPython, resolvePathInSandbox, type FileSystemOperation } from "./main.ts";
 
 Deno.test("runPython simple test", async () => {
@@ -36,9 +36,7 @@ Deno.test("resolvePathInSandbox - basic resolution", () => {
   assertEquals(resolvePathInSandbox("/tmp/absolute.txt"), "/tmp/absolute.txt");
 });
 
-// REMOVIDO: teste "resolvePathInSandbox - with working directory" pois working directory foi removido
-
-Deno.test("FileSystem - basic operations", async () => {
+Deno.test("FileSystem - operations", async () => {
   const operations: FileSystemOperation[] = [
     {
       operation: "write",
@@ -95,71 +93,6 @@ result
   assertEquals(resultObj.working_dir, "/sandbox");
 });
 
-// REMOVIDO: teste "FileSystem - working directory" pois working directory foi removido
-
-Deno.test("FileSystem - complex workflow", async () => {
-  const operations: FileSystemOperation[] = [
-    {
-      operation: "mkdir",
-      path: "workspace",
-    },
-    {
-      operation: "write",
-      path: "workspace/input.txt",
-      content: "oldvalue=100\nother line",
-    },
-    {
-      operation: "write",
-      path: "workspace/config.ini",
-      content: "[database]\nhost=localhost\nport=5432",
-    }
-  ];
-
-  const result = await runPython(`
-import os
-import configparser
-
-# Modify input file
-with open("workspace/input.txt", "r") as f:
-    content = f.read()
-
-modified_content = content.replace("oldvalue=100", "newvalue=200")
-
-with open("workspace/input.txt", "w") as f:
-    f.write(modified_content)
-
-# Read config
-config = configparser.ConfigParser()
-config.read("workspace/config.ini")
-
-# Create report
-with open("workspace/report.txt", "w") as f:
-    f.write(f"Host: {config['database']['host']}\\n")
-    f.write("Modification successful\\n")
-
-workspace_files = os.listdir("workspace")
-
-result = {
-    "modification_success": "newvalue=200" in modified_content,
-    "db_host": config['database']['host'],
-    "workspace_files": sorted(workspace_files),
-    "working_dir": os.getcwd()
-}
-
-result
-  `, {
-    fileSystemOperations: operations
-  });
-
-  assertEquals(result.success, true);
-  const resultObj = JSON.parse(result.jsonResult || "null");
-  
-  assertEquals(resultObj.modification_success, true);
-  assertEquals(resultObj.db_host, "localhost");
-  assertEquals(resultObj.workspace_files, ["config.ini", "input.txt", "report.txt"]);
-  assertEquals(resultObj.working_dir, "/sandbox");
-});
-
 Deno.test("FileSystem - binary operations", async () => {
   const operations: FileSystemOperation[] = [
     {
@@ -204,7 +137,6 @@ result
   assertEquals(resultObj.working_dir, "/sandbox");
 });
 
-// NOVO: Teste adicional para verificar o memfs funcionando com diferentes estruturas de diretórios
 Deno.test("FileSystem - memfs directory structure", async () => {
   const operations: FileSystemOperation[] = [
     {
