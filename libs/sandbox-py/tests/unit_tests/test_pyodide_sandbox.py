@@ -62,9 +62,9 @@ def test_pyodide_sandbox_tool() -> None:
         enable_filesystem=True,
         allow_net=True,
     )
-    result = tool.invoke("x = 5; print(x)")
+    result = tool.invoke({"code": "x = 5; print(x)"})
     assert result == "5"
-    result = tool.invoke("x = 5; print(1); print(2)")
+    result = tool.invoke({"code": "x = 5; print(1); print(2)"})
     assert result == "1\n2"
 
 
@@ -73,31 +73,33 @@ def test_pyodide_timeout() -> None:
     tool = PyodideSandboxTool(
         enable_filesystem=True,
         allow_net=True,
+        timeout_seconds=0.1,
     )
-    result = tool.invoke("while True: pass")
-    assert result == "Error during execution: Execution timed out after 0.1 seconds"
+    result = tool.invoke({"code": "while True: pass"})
+    assert "timed out after 0.1 seconds" in result
 
 
 async def test_async_pyodide_sandbox_tool() -> None:
-    """Test synchronous invocation of PyodideSandboxTool."""
+    """Test asynchronous invocation of PyodideSandboxTool."""
     tool = PyodideSandboxTool(
         enable_filesystem=True,
         allow_net=True,
     )
-    result = await tool.ainvoke("x = 5; print(x)")
+    result = await tool.ainvoke({"code": "x = 5; print(x)"})
     assert result == "5"
-    result = await tool.ainvoke("x = 5; print(1); print(2)")
+    result = await tool.ainvoke({"code": "x = 5; print(1); print(2)"})
     assert result == "1\n2"
 
 
 async def test_async_pyodide_timeout() -> None:
-    """Test synchronous invocation of PyodideSandboxTool with timeout."""
+    """Test asynchronous invocation of PyodideSandboxTool with timeout."""
     tool = PyodideSandboxTool(
         enable_filesystem=True,
         allow_net=True,
+        timeout_seconds=0.1,
     )
-    result = await tool.ainvoke("while True: pass")
-    assert result == "Error during execution: Execution timed out after 0.1 seconds"
+    result = await tool.ainvoke({"code": "while True: pass"})
+    assert "timed out after 0.1 seconds" in result
 
 
 async def test_stdout_sessionless(pyodide_package: None) -> None:
@@ -219,7 +221,7 @@ def test_sync_pyodide_sandbox_timeout(pyodide_package: None) -> None:
     assert "timed out" in result.stderr.lower()
 
 
-async def test_filesystem_basic_operations() -> None:
+async def test_filesystem_basic_operations(pyodide_package: None) -> None:
     """Test basic filesystem operations."""
     sandbox = PyodideSandbox(
         enable_filesystem=True,
@@ -262,7 +264,7 @@ print(f"Created file content: {created_content}")
 """
 
     result = await sandbox.execute(code)
-    assert result.status == "success"
+    assert result.status == "success", f"Execution failed: {result.stderr}"
     assert "Hello, World!" in result.stdout
     assert "value" in result.stdout
     assert "Processing complete!" in result.stdout
@@ -292,12 +294,12 @@ for user in users:
     print(f"{user['name']} is {user['age']} years old")
 """
 
-    result = tool.invoke(code)
+    result = tool.invoke({"code": code})
     assert "Alice is 30 years old" in result
     assert "Bob is 25 years old" in result
 
 
-async def test_binary_file_operations() -> None:
+async def test_binary_file_operations(pyodide_package: None) -> None:
     """Test binary file operations."""
     sandbox = PyodideSandbox(
         enable_filesystem=True,
@@ -325,7 +327,7 @@ print(f"Original size: {len(data)}")  # Debug
 """
 
     result = await sandbox.execute(code)
-    assert result.status == "success"
+    assert result.status == "success", f"Execution failed: {result.stderr}"
     assert "Is PNG: True" in result.stdout
     # Verify the size matches the binary data size
     assert f"Size: {len(binary_data)} bytes" in result.stdout

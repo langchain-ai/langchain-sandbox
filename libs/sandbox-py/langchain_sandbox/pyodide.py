@@ -86,7 +86,8 @@ class FileSystemOperation:
 
 # Published package name
 PKG_NAME = "jsr:@langchain/pyodide-sandbox@0.0.4"
-#PKG_NAME = "../pyodide-sandbox-js/main.ts"  # noqa: ERA001
+# PKG_NAME = "../pyodide-sandbox-js/main.ts"  # noqa: ERA001
+
 
 def build_permission_flag(
     flag: str,
@@ -663,10 +664,6 @@ class SyncPyodideSandbox(BasePyodideSandbox):
 class PyodideSandboxTool(BaseTool):
     r"""Tool for running python code in a PyodideSandbox.
 
-    This tool extends the base PyodideSandbox functionality with support for
-    attaching files and creating an in-memory filesystem. Files attached to
-    the tool will be available within the Python execution environment.
-
     If you use a stateful sandbox (PyodideSandboxTool(stateful=True)),
     the state between code executions (to variables, imports,
     and definitions, etc.), will be persisted using LangGraph checkpointer.
@@ -822,6 +819,14 @@ class PyodideSandboxTool(BaseTool):
             **kwargs,
         )
 
+        # Store initialization parameters
+        self.allow_env = kwargs.get("allow_env", False)
+        self.allow_read = kwargs.get("allow_read", False)
+        self.allow_write = kwargs.get("allow_write", False)
+        self.allow_run = kwargs.get("allow_run", False)
+        self.allow_ffi = kwargs.get("allow_ffi", False)
+        self.node_modules_dir = kwargs.get("node_modules_dir", "auto")
+
         self.args_schema: type[BaseModel] = PyodideSandboxToolInput
         self._structured_tool = None  # Initialize as None
         self._sandbox = PyodideSandbox(
@@ -875,112 +880,6 @@ class PyodideSandboxTool(BaseTool):
                 "open(), etc."
             )
         return base
-
-    def as_structured_tool(self) -> StructuredTool:
-        """Return a StructuredTool version of this tool.
-
-        This method provides access to a StructuredTool interface while maintaining
-        the BaseTool as the primary interface. The StructuredTool's description
-        is kept in sync with attached files.
-
-        Returns:
-            StructuredTool instance with dynamic description updates
-        """
-        if self._structured_tool is None:
-            self._structured_tool = StructuredTool.from_function(
-                name=self.name,
-                description=self._build_description(),
-                func=(
-                    self._run_sync
-                    if not self.stateful
-                    else self._run_stateful_sync
-                ),
-                args_schema=self.args_schema,
-            )
-        return self._structured_tool
-
-    @property
-    def tool(self) -> StructuredTool:
-        """Legacy property for backwards compatibility.
-
-        DEPRECATED: Use as_structured_tool() instead.
-
-        Returns:
-            StructuredTool instance
-        """
-        return self.as_structured_tool()
-
-    def _run_sync(self, code: str) -> str:
-        """Synchronous execution function for non-stateful mode."""
-        result = self._sync_sandbox.execute(
-            code, timeout_seconds=self.timeout_seconds
-        )
-
-        if result.status == "error":
-            error_msg = (
-                result.stderr
-                if result.stderr
-                else "Execution failed with unknown error"
-            )
-            return f"Error during execution: {error_msg}"
-
-        if result.stdout:
-            return result.stdout
-
-        if result.result is not None:
-            return str(result.result)
-
-        return ""
-
-    def _run_stateful_sync(
-        self,
-        code: str,
-        state: dict[str, Any] | BaseModel,
-        tool_call_id: str,
-    ) -> Any:  # noqa: ANN401
-        """Synchronous execution function for stateful mode."""
-        required_keys = {"session_bytes", "session_metadata", "messages"}
-        actual_keys = set(state) if isinstance(state, dict) else set(state.__dict__)
-        if missing_keys := required_keys - actual_keys:
-            error_msg = (
-                "Input state is missing "
-                f"the following required keys: {missing_keys}"
-            )
-            raise ValueError(error_msg)
-
-        if isinstance(state, dict):
-            session_bytes = state["session_bytes"]
-            session_metadata = state["session_metadata"]
-        else:
-            session_bytes = state.session_bytes
-            session_metadata = state.session_metadata
-
-        result = self._sync_sandbox.execute(
-            code,
-            session_bytes=session_bytes,
-            session_metadata=session_metadata,
-            timeout_seconds=self.timeout_seconds,
-        )
-
-        if result.stderr:
-            tool_result = f"Error during execution: {result.stderr}"
-        else:
-            tool_result = result.stdout
-
-        from langgraph.types import Command
-
-        return Command(
-            update={
-                "session_bytes": result.session_bytes,
-                "session_metadata": result.session_metadata,
-                "messages": [
-                    ToolMessage(
-                        content=tool_result,
-                        tool_call_id=tool_call_id,
-                    )
-                ],
-            }
-        )
 
     def attach_file(
         self,
@@ -1069,6 +968,101 @@ class PyodideSandboxTool(BaseTool):
         self.description = new_description
         if self._structured_tool:
             self._structured_tool.description = new_description
+
+    def as_structured_tool(self) -> StructuredTool:
+        """Return a StructuredTool version of this tool.
+
+        This method provides access to a StructuredTool interface while maintaining
+        the BaseTool as the primary interface. The StructuredTool's description
+        is kept in sync with attached files.
+
+        Returns:
+            StructuredTool instance with dynamic description updates
+        """
+        if self._structured_tool is None:
+            self._structured_tool = StructuredTool.from_function(
+                name=self.name,
+                description=self._build_description(),
+                func=(
+                    self._run_sync
+                    if not self.stateful
+                    else self._run_stateful_sync
+                ),
+                args_schema=self.args_schema,
+            )
+        return self._structured_tool
+
+    def _run_sync(self, code: str) -> str:
+        """Synchronous execution function for non-stateful mode."""
+        result = self._sync_sandbox.execute(
+            code, timeout_seconds=self.timeout_seconds
+        )
+
+        if result.status == "error":
+            error_msg = (
+                result.stderr
+                if result.stderr
+                else "Execution failed with unknown error"
+            )
+            return f"Error during execution: {error_msg}"
+
+        if result.stdout:
+            return result.stdout
+
+        if result.result is not None:
+            return str(result.result)
+
+        return ""
+
+    def _run_stateful_sync(
+        self,
+        code: str,
+        state: dict[str, Any] | BaseModel,
+        tool_call_id: str,
+    ) -> Any:  # noqa: ANN401
+        """Synchronous execution function for stateful mode."""
+        required_keys = {"session_bytes", "session_metadata", "messages"}
+        actual_keys = set(state) if isinstance(state, dict) else set(state.__dict__)
+        if missing_keys := required_keys - actual_keys:
+            error_msg = (
+                "Input state is missing "
+                f"the following required keys: {missing_keys}"
+            )
+            raise ValueError(error_msg)
+
+        if isinstance(state, dict):
+            session_bytes = state["session_bytes"]
+            session_metadata = state["session_metadata"]
+        else:
+            session_bytes = state.session_bytes
+            session_metadata = state.session_metadata
+
+        result = self._sync_sandbox.execute(
+            code,
+            session_bytes=session_bytes,
+            session_metadata=session_metadata,
+            timeout_seconds=self.timeout_seconds,
+        )
+
+        if result.stderr:
+            tool_result = f"Error during execution: {result.stderr}"
+        else:
+            tool_result = result.stdout
+
+        from langgraph.types import Command
+
+        return Command(
+            update={
+                "session_bytes": result.session_bytes,
+                "session_metadata": result.session_metadata,
+                "messages": [
+                    ToolMessage(
+                        content=tool_result,
+                        tool_call_id=tool_call_id,
+                    )
+                ],
+            }
+        )
 
     def _run(
         self,
@@ -1199,8 +1193,8 @@ class PyodideSandboxStructuredTool:
     r"""Pure StructuredTool wrapper for PyodideSandbox with dynamic description updates.
 
     This class provides a standalone StructuredTool interface for users who prefer
-    to work exclusively with StructuredTool rather than BaseTool. It maintains all
-    the filesystem functionality and dynamic description updates.
+    to work exclusively with StructuredTool rather than the main PyodideSandboxTool.
+    It maintains all the filesystem functionality and dynamic description updates.
 
     Example usage:
         ```python
@@ -1217,7 +1211,7 @@ class PyodideSandboxStructuredTool:
         # Attach files
         sandbox_tool.attach_file("data.csv", "name,age\\nJohn,25")
 
-        # Use in agent
+        # Use in agent - access via .tool property
         agent = create_react_agent(llm, [sandbox_tool.tool])
         ```
     """
@@ -1229,8 +1223,6 @@ class PyodideSandboxStructuredTool:
             **kwargs: All arguments are passed to PyodideSandboxTool
         """
         self._base_tool = PyodideSandboxTool(**kwargs)
-        # Force creation of the StructuredTool
-        self._tool = self._base_tool.as_structured_tool()
 
     @property
     def tool(self) -> StructuredTool:
@@ -1239,7 +1231,7 @@ class PyodideSandboxStructuredTool:
         Returns:
             StructuredTool instance with current description
         """
-        return self._tool
+        return self._base_tool.as_structured_tool()
 
     def attach_file(
         self,
