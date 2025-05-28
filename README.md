@@ -34,9 +34,6 @@ LangChain Sandbox provides a secure environment for executing untrusted Python c
 ## 💡 Example Usage
 
 
-> [!warning]
-> Use `alllow_net` to limit the network requests that can be made by the sandboxed code to avoid SSRF attacks
-> https://docs.deno.com/runtime/fundamentals/security/#network-access
 
 ```python
 from langchain_sandbox import PyodideSandbox
@@ -156,17 +153,7 @@ sandbox_tool = PyodideSandboxTool(
     allow_net=True,
 )
 
-sales_data = """date,product,category,quantity,price,region
-2024-01-15,Laptop,Electronics,2,1299.99,North
-2024-01-16,Chair,Furniture,1,249.50,South
-2024-01-16,T-shirt,Clothing,5,29.99,East
-2024-01-17,Laptop,Electronics,1,1299.99,West
-2024-01-18,Phone,Electronics,3,799.99,North
-2024-01-19,Desk,Furniture,2,399.99,South
-2024-01-20,Jeans,Clothing,4,79.99,East
-2024-01-21,Tablet,Electronics,2,499.99,West
-2024-01-22,Sofa,Furniture,1,899.99,North
-2024-01-23,Shoes,Clothing,3,129.99,South"""
+sales_data = """...csv_data"""
 
 sandbox_tool.attach_file("sales.csv", sales_data)
 
