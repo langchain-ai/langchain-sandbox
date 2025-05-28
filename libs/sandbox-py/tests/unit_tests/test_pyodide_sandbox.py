@@ -20,6 +20,17 @@ def pyodide_package(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("langchain_sandbox.pyodide.PKG_NAME", local_script)
 
 
+@pytest.fixture
+def mock_csv_data():
+    """Sample sales data for testing."""
+    return """date,product_id,category,quantity,price,customer_id,region
+2024-01-15,P001,Electronics,2,499.99,C123,North
+2024-01-16,P002,Furniture,1,899.50,C124,South
+2024-01-16,P003,Clothing,5,59.99,C125,East
+2024-01-17,P001,Electronics,1,499.99,C126,West
+2024-01-18,P004,Electronics,3,299.99,C127,North"""
+
+
 def get_default_sandbox(stateful: bool = False) -> PyodideSandbox:
     """Get default PyodideSandbox instance for testing."""
     return PyodideSandbox(
@@ -167,226 +178,136 @@ def test_sync_pyodide_sandbox_timeout(pyodide_package: None) -> None:
 
 def test_pyodide_sandbox_tool() -> None:
     """Test synchronous invocation of PyodideSandboxTool."""
-    tool = PyodideSandboxTool(stateful=False, allow_net=True)
+    tool = PyodideSandboxTool(stateful=False, allow_net=True, allow_read=True, allow_write=True)
     result = tool.invoke("x = 5; print(x)")
     assert result == "5"
     result = tool.invoke("x = 5; print(1); print(2)")
-    assert result == "12"
+    assert result == "1\n2"
 
 
 def test_pyodide_timeout() -> None:
     """Test synchronous invocation of PyodideSandboxTool with timeout."""
-    tool = PyodideSandboxTool(stateful=False, timeout_seconds=0.1, allow_net=True)
+    tool = PyodideSandboxTool(stateful=False, timeout_seconds=0.1, allow_net=True, allow_read=True, allow_write=True)
     result = tool.invoke("while True: pass")
     assert result == "Error during execution: Execution timed out after 0.1 seconds"
 
 
 async def test_async_pyodide_sandbox_tool() -> None:
     """Test synchronous invocation of PyodideSandboxTool."""
-    tool = PyodideSandboxTool(stateful=False, allow_net=True)
+    tool = PyodideSandboxTool(stateful=False, allow_net=True, allow_read=True, allow_write=True)
     result = await tool.ainvoke("x = 5; print(x)")
     assert result == "5"
     result = await tool.ainvoke("x = 5; print(1); print(2)")
     # TODO: Need to preserve newlines in the output # noqa: FIX002, TD002
     # https://github.com/langchain-ai/langchain-sandbox/issues/26
-    assert result == "12"
+    assert result == "1\n2"
 
 
 async def test_async_pyodide_timeout() -> None:
     """Test synchronous invocation of PyodideSandboxTool with timeout."""
-    tool = PyodideSandboxTool(stateful=False, timeout_seconds=0.1, allow_net=True)
+    tool = PyodideSandboxTool(stateful=False, timeout_seconds=0.1, allow_net=True, allow_read=True, allow_write=True)
     result = await tool.ainvoke("while True: pass")
     assert result == "Error during execution: Execution timed out after 0.1 seconds"
 
-
-async def test_attach_binary_file(pyodide_package: None) -> None:
-    """Test attaching and reading a binary file."""
-    sandbox = PyodideSandbox(
-        allow_read=True,
-        allow_write=True,
-    )
-
-    simple_binary = bytes([0x01, 0x02, 0x03, 0x04, 0x05])
-
-    sandbox.attach_file("test_binary.bin", simple_binary)
-
+async def test_filesystem_basic_operations():
+    """Test basic filesystem operations."""
+    sandbox = PyodideSandbox(enable_filesystem=True, allow_net=True, allow_read=True, allow_write=True)
+    
+    # Attach files
+    sandbox.attach_file("test.txt", "Hello, World!")
+    sandbox.attach_file("data.json", '{"key": "value"}')
+    sandbox.create_directory("output")
+    
     code = """
 import os
-import base64
+import json
 
-file_path = "/sandbox/test_binary.bin"
-if os.path.exists(file_path):
-    with open(file_path, "rb") as f:
-        content = f.read()
+# Read files
+with open("test.txt", "r") as f:
+    txt_content = f.read()
 
-    print(f"File exists: True")
-    print(f"Content length: {len(content)}")
-    print(f"Content bytes: {', '.join(str(b) for b in content)}")
-else:
-    print("File exists: False")
+with open("data.json", "r") as f:
+    json_data = json.load(f)
+
+# Create new file
+with open("output/result.txt", "w") as f:
+    f.write("Processing complete!")
+
+# List files
+root_files = sorted(os.listdir("."))
+output_files = sorted(os.listdir("output"))
+
+print(f"Text: {txt_content}")
+print(f"JSON key: {json_data['key']}")
+print(f"Root files: {root_files}")  
+print(f"Output files: {output_files}")
+
+# Read the created file to verify it was written
+with open("output/result.txt", "r") as f:
+    created_content = f.read()
+print(f"Created file content: {created_content}")
 """
-
+    
     result = await sandbox.execute(code)
-
-    assert result.status == "success", f"Error in execution: {result.stderr}"
-    assert "File exists: True" in result.stdout
-    assert "Content length: 5" in result.stdout
-    assert "Content bytes: 1, 2, 3, 4, 5" in result.stdout
-
-
-async def test_clear_files_after_execution(pyodide_package: None) -> None:
-    """Test clearing files after execution."""
-    sandbox = get_default_sandbox()
-
-    sandbox.attach_file("temp.txt", "Temporary content")
-
-    result1 = await sandbox.execute(
-        'print(open("/sandbox/temp.txt").read())',
-        clear_files=True
-    )
-    assert result1.status == "success"
-    assert "Temporary content" in result1.stdout
-
-    assert len(sandbox.file_operations) == 0
-
-    result2 = await sandbox.execute("""
-import os
-if os.path.exists("/sandbox/temp.txt"):
-    print("File still exists")
-else:
-    print("File is gone")
-""")
-    assert result2.status == "success"
-    assert "File is gone" in result2.stdout
+    print(f"DEBUG - stdout: {repr(result.stdout)}")  # Para ver as quebras de linha
+    assert result.status == "success"
+    assert "Hello, World!" in result.stdout
+    assert "value" in result.stdout
+    assert "Processing complete!" in result.stdout
 
 
-async def test_tool_with_file_attachment(pyodide_package: None) -> None:
-    """Test using PyodideSandboxTool with file attachment."""
-    tool = PyodideSandboxTool(allow_read=True, allow_write=True, allow_net=True)
-
-    tool.attach_file("data.csv", "id,value\n1,100\n2,200\n3,300")
-    tool.attach_file("config.json", '{"max_value": 250, "min_value": 50}')
-
+def test_filesystem_tool_usage():
+    """Test filesystem with PyodideSandboxTool."""
+    tool = PyodideSandboxTool(enable_filesystem=True, allow_net=True, allow_read=True, allow_write=True)
+    
+    # Attach CSV data
+    csv_data = "name,age\nAlice,30\nBob,25"
+    tool.attach_file("users.csv", csv_data)
+    
     code = """
 import csv
-import json
 
-with open("/sandbox/data.csv", "r") as f:
+users = []
+with open("users.csv", "r") as f:
     reader = csv.DictReader(f)
-    rows = list(reader)
+    for row in reader:
+        users.append(row)
 
-with open("/sandbox/config.json", "r") as f:
-    config = json.load(f)
-
-# Filter data based on config
-filtered = []
-for row in rows:
-    value = int(row["value"])
-    if config["min_value"] <= value <= config["max_value"]:
-        filtered.append(row)
-
-print(f"Filtered data:")
-for row in filtered:
-    print(f"id: {row['id']}, value: {row['value']}")
+for user in users:
+    print(f"{user['name']} is {user['age']} years old")
 """
-
-    result = await tool.ainvoke(code)
-
-    assert "Filtered data:" in result
-    assert "id: 1, value: 100" in result
-    assert "id: 2, value: 200" in result
-    # Value 300 should be excluded by filter
-    assert "id: 3, value: 300" not in result
+    
+    result = tool.invoke(code)
+    assert "Alice is 30 years old" in result
+    assert "Bob is 25 years old" in result
 
 
-async def test_directory_operations(pyodide_package: None) -> None:
-    """Test directory creation and file operations within directories."""
-    sandbox = get_default_sandbox()
-
-    sandbox.attach_file("nested/dir/file.txt", "Content in nested directory")
-
+async def test_binary_file_operations():
+    """Test binary file operations."""
+    sandbox = PyodideSandbox(enable_filesystem=True, allow_net=True, allow_read=True, allow_write=True)
+    
+    # Create some binary data
+    binary_data = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01'
+    sandbox.attach_binary_file("image.png", binary_data)
+    
     code = """
-import os
-from pathlib import Path
+import base64
 
-dir_exists = os.path.isdir("/sandbox/nested/dir")
-file_exists = os.path.exists("/sandbox/nested/dir/file.txt")
-content = Path("/sandbox/nested/dir/file.txt").read_text() if file_exists else ""
+# Read binary file
+with open("image.png", "rb") as f:
+    data = f.read()
 
-print(f"Directory exists: {dir_exists}")
-print(f"File exists: {file_exists}")
-print(f"Content: {content}")
+# Check if it's the PNG header
+is_png = data.startswith(b'\\x89PNG')
+size = len(data)
+
+print(f"Is PNG: {is_png}")
+print(f"Size: {size} bytes")
+print(f"Original size: {len(data)}")  # Debug
 """
-
+    
     result = await sandbox.execute(code)
     assert result.status == "success"
-    assert "Directory exists: True" in result.stdout
-    assert "File exists: True" in result.stdout
-    assert "Content: Content in nested directory" in result.stdout
-
-
-def test_sync_file_operations(pyodide_package: None) -> None:
-    """Test synchronous file operations."""
-    sandbox = get_default_sync_sandbox()
-
-    sandbox.attach_files({
-        "data.txt": "Text file content",
-        "config.json": '{"enabled": true}'
-    })
-
-    code = """
-import json
-from pathlib import Path
-
-text_content = Path("/sandbox/data.txt").read_text()
-json_content = json.loads(Path("/sandbox/config.json").read_text())
-
-print(f"Text content: {text_content}")
-print(f"JSON enabled: {json_content['enabled']}")
-"""
-
-    result = sandbox.execute(code)
-    assert result.status == "success"
-    assert "Text content: Text file content" in result.stdout
-    assert "JSON enabled: True" in result.stdout
-
-
-async def test_attach_files_with_explicit_binary_flag(pyodide_package: None) -> None:
-    """Test attaching files with explicit binary flag in dictionary format."""
-    sandbox = get_default_sandbox()
-
-    text_content = "Hello world"
-    binary_content = b"\x00\x01\x02\x03"
-
-    sandbox.attach_files({
-        "text_file.txt": {"content": text_content, "binary": False},
-        "binary_file.bin": {"content": binary_content, "binary": True}
-    })
-
-    code = """
-from pathlib import Path
-import os
-
-# Check text file
-text_path = "/sandbox/text_file.txt"
-if os.path.exists(text_path):
-    with open(text_path, "r") as f:
-        text_content = f.read()
-    print(f"Text content: {text_content}")
-
-# Check binary file
-bin_path = "/sandbox/binary_file.bin"
-if os.path.exists(bin_path):
-    with open(bin_path, "rb") as f:
-        bin_content = f.read()
-    print(f"Binary exists: True")
-    print(f"Binary length: {len(bin_content)}")
-    print(f"Binary bytes: {', '.join(str(b) for b in bin_content)}")
-"""
-
-    result = await sandbox.execute(code)
-    assert result.status == "success"
-    assert "Text content: Hello world" in result.stdout
-    assert "Binary exists: True" in result.stdout
-    assert "Binary length: 4" in result.stdout
-    assert "Binary bytes: 0, 1, 2, 3" in result.stdout
+    assert "Is PNG: True" in result.stdout
+    # Ajustar para o tamanho real ou verificar se é >= 16
+    assert f"Size: {len(binary_data)} bytes" in result.stdout

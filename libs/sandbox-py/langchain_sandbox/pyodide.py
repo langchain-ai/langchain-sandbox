@@ -15,8 +15,8 @@ from langchain_core.callbacks import (
 )
 from langchain_core.messages import ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool, InjectedToolCallId
-from pydantic import BaseModel, Field
+from langchain_core.tools import BaseTool, StructuredTool, InjectedToolCallId
+from pydantic import BaseModel, Field, PrivateAttr
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,22 @@ class FileSystemOperation:
     content: str | None = None
     encoding: str | None = None
     destination: str | None = None
+    
+    def to_dict(self) -> dict[str, str]:
+        """Convert to dict for JSON serialization."""
+        result = {
+            "operation": self.operation,
+            "path": self.path,
+        }
+        
+        if self.content is not None:
+            result["content"] = self.content
+        if self.encoding is not None:
+            result["encoding"] = self.encoding
+        if self.destination is not None:
+            result["destination"] = self.destination
+            
+        return result
 
 
 # Published package name
@@ -82,7 +98,7 @@ class BasePyodideSandbox:
         allow_ffi: list[str] | bool = False,
         node_modules_dir: str = "auto",
         skip_deno_check: bool = False,
-        enable_filesystem: bool = False,  # Novo: controle explícito do filesystem
+        enable_filesystem: bool = False,
     ) -> None:
         """Initialize the sandbox with specific Deno permissions."""
         self.stateful = stateful
@@ -128,15 +144,11 @@ class BasePyodideSandbox:
         *,
         encoding: str = "utf-8",
     ) -> None:
-        """Attach a file to the sandbox filesystem.
-        
-        Args:
-            path: Path where the file should be created (relative to /sandbox)
-            content: Content of the file as a string
-            encoding: Text encoding for the file (default: utf-8)
-        """
-        # Auto-enable filesystem when files are attached
+        """Attach a file to the sandbox filesystem."""
         self.enable_filesystem = True
+        
+        if not isinstance(content, str):
+            raise ValueError("Content must be a string for text files")
         
         operation = FileSystemOperation(
             operation="write",
@@ -145,21 +157,18 @@ class BasePyodideSandbox:
             encoding=encoding,
         )
         self._filesystem_operations.append(operation)
-        logger.debug(f"Attached file: {path} ({len(content)} chars)")
+        logger.debug(f"Attached file: {path} ({len(content)} chars, encoding: {encoding})")
 
     def attach_binary_file(
         self,
         path: str,
         content: bytes,
     ) -> None:
-        """Attach a binary file to the sandbox filesystem.
-        
-        Args:
-            path: Path where the file should be created (relative to /sandbox)
-            content: Binary content of the file
-        """
-        # Auto-enable filesystem when files are attached
+        """Attach a binary file to the sandbox filesystem."""
         self.enable_filesystem = True
+        
+        if not isinstance(content, bytes):
+            raise ValueError("Content must be bytes for binary files")
         
         b64_content = base64.b64encode(content).decode("ascii")
         operation = FileSystemOperation(
@@ -169,15 +178,10 @@ class BasePyodideSandbox:
             encoding="binary",
         )
         self._filesystem_operations.append(operation)
-        logger.debug(f"Attached binary file: {path} ({len(content)} bytes)")
+        logger.debug(f"Attached binary file: {path} ({len(content)} bytes -> {len(b64_content)} b64 chars)")
 
     def create_directory(self, path: str) -> None:
-        """Create a directory in the sandbox filesystem.
-        
-        Args:
-            path: Directory path to create (relative to /sandbox)
-        """
-        # Auto-enable filesystem when directories are created
+        """Create a directory in the sandbox filesystem."""
         self.enable_filesystem = True
         
         operation = FileSystemOperation(
@@ -187,72 +191,13 @@ class BasePyodideSandbox:
         self._filesystem_operations.append(operation)
         logger.debug(f"Created directory: {path}")
 
-    def read_file(self, path: str, *, encoding: str = "utf-8") -> None:
-        """Queue a file read operation.
-        
-        Args:
-            path: Path to read from (relative to /sandbox)
-            encoding: Text encoding for the file (default: utf-8)
-        
-        Note: This queues the operation but doesn't return content immediately.
-        Use this when you need to read files during code execution.
-        """
-        self.enable_filesystem = True
-        
-        operation = FileSystemOperation(
-            operation="read",
-            path=path,
-            encoding=encoding,
-        )
-        self._filesystem_operations.append(operation)
-        logger.debug(f"Queued read operation: {path}")
-
-    def list_directory(self, path: str = ".") -> None:
-        """Queue a directory listing operation.
-        
-        Args:
-            path: Directory path to list (relative to /sandbox, default: current)
-        """
-        self.enable_filesystem = True
-        
-        operation = FileSystemOperation(
-            operation="list",
-            path=path,
-        )
-        self._filesystem_operations.append(operation)
-        logger.debug(f"Queued list operation: {path}")
-
-    def remove_path(self, path: str) -> None:
-        """Queue a file or directory removal operation.
-        
-        Args:
-            path: Path to remove (relative to /sandbox)
-        """
-        self.enable_filesystem = True
-        
-        operation = FileSystemOperation(
-            operation="remove",
-            path=path,
-        )
-        self._filesystem_operations.append(operation)
-        logger.debug(f"Queued remove operation: {path}")
-
-    def copy_path(self, source: str, destination: str) -> None:
-        """Queue a file or directory copy operation.
-        
-        Args:
-            source: Source path (relative to /sandbox)
-            destination: Destination path (relative to /sandbox)
-        """
-        self.enable_filesystem = True
-        
-        operation = FileSystemOperation(
-            operation="copy",
-            path=source,
-            destination=destination,
-        )
-        self._filesystem_operations.append(operation)
-        logger.debug(f"Queued copy operation: {source} -> {destination}")
+    def get_attached_files(self) -> list[str]:
+        """Get list of attached file paths."""
+        files = []
+        for op in self._filesystem_operations:
+            if op.operation in ["write"]:
+                files.append(op.path)
+        return files
 
     def clear_filesystem_operations(self) -> None:
         """Clear all queued filesystem operations."""
@@ -284,35 +229,19 @@ class BasePyodideSandbox:
         if kwargs.get('session_metadata'):
             cmd.extend(["-m", json.dumps(kwargs['session_metadata'])])
 
-        # FILESYSTEM: Ativado se há operações ou foi explicitamente habilitado
+        # FILESYSTEM
         if self._filesystem_operations or self.enable_filesystem:
-            # Construir operações filesystem se existem
             if self._filesystem_operations:
-                fs_ops = []
-                for op in self._filesystem_operations:
-                    op_dict = {
-                        "operation": op.operation,
-                        "path": op.path,
-                    }
-                    if op.content is not None:
-                        op_dict["content"] = op.content
-                    if op.encoding is not None:
-                        op_dict["encoding"] = op.encoding
-                    if op.destination is not None:
-                        op_dict["destination"] = op.destination
-                    fs_ops.append(op_dict)
-                
-                cmd.extend(["-fs", json.dumps(fs_ops)])
+                fs_ops = [op.to_dict() for op in self._filesystem_operations]
+                fs_json = json.dumps(fs_ops, ensure_ascii=True, separators=(',', ':'))
+                cmd.extend(["-x", fs_json])
                 
                 logger.debug(f"Filesystem enabled with {len(fs_ops)} operations")
-                if len(fs_ops) <= 5:  # Log detalhes se poucas operações
-                    for i, op in enumerate(fs_ops):
-                        logger.debug(f"  Op {i+1}: {op['operation']} {op['path']}")
             else:
-                # Filesystem habilitado mas sem operações iniciais
-                cmd.extend(["-fs", "[]"])
+                cmd.extend(["-x", "[]"])
                 logger.debug("Filesystem enabled with no initial operations")
 
+        logger.debug(f"Full command: {' '.join(cmd)}")
         return cmd
 
 
@@ -342,9 +271,6 @@ class PyodideSandbox(BasePyodideSandbox):
             memory_limit_mb=memory_limit_mb,
         )
 
-        # Debug logging
-        logger.debug(f"Executing command: {' '.join(cmd[:8])}{'...' if len(cmd) > 8 else ''}")
-
         # Create and run the subprocess
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -353,7 +279,6 @@ class PyodideSandbox(BasePyodideSandbox):
         )
 
         try:
-            # Wait for process with a timeout
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 process.communicate(),
                 timeout=timeout_seconds,
@@ -361,7 +286,6 @@ class PyodideSandbox(BasePyodideSandbox):
             stdout = stdout_bytes.decode("utf-8", errors="replace")
 
             if stdout:
-                # Extract JSON from output that may contain loading messages
                 full_result = json.loads(stdout)
                 stdout = full_result.get("stdout", None)
                 stderr = full_result.get("stderr", None)
@@ -371,17 +295,10 @@ class PyodideSandbox(BasePyodideSandbox):
                 filesystem_info = full_result.get("fileSystemInfo", None)
                 filesystem_operations = full_result.get("fileSystemOperations", None)
                 
-                # Convert the Uint8Array to Python bytes
                 session_bytes_array = full_result.get("sessionBytes", None)
                 session_bytes = (
                     bytes(session_bytes_array) if session_bytes_array else None
                 )
-                
-                # Log filesystem info if available
-                if filesystem_info:
-                    logger.debug(f"Filesystem: {filesystem_info['type']} at {filesystem_info['mountPoint']}")
-                if filesystem_operations:
-                    logger.debug(f"Filesystem operations completed: {len(filesystem_operations)}")
             else:
                 stderr = stderr_bytes.decode("utf-8", errors="replace")
                 status = "error"
@@ -400,7 +317,6 @@ class PyodideSandbox(BasePyodideSandbox):
             filesystem_info = None
             filesystem_operations = None
         except asyncio.CancelledError:
-            # Optionally: log cancellation if needed
             pass
         
         end_time = time.time()
@@ -444,17 +360,13 @@ class SyncPyodideSandbox(BasePyodideSandbox):
             memory_limit_mb=memory_limit_mb,
         )
 
-        # Debug logging
-        logger.debug(f"Executing command: {' '.join(cmd[:8])}{'...' if len(cmd) > 8 else ''}")
-
         try:
-            # Run the subprocess with timeout
             process = subprocess.run(  # noqa: S603
                 cmd,
                 capture_output=True,
-                text=False,  # Keep as bytes for proper decoding
+                text=False,
                 timeout=timeout_seconds,
-                check=False,  # Don't raise on non-zero exit
+                check=False,
             )
 
             stdout_bytes = process.stdout
@@ -463,7 +375,6 @@ class SyncPyodideSandbox(BasePyodideSandbox):
             stdout = stdout_bytes.decode("utf-8", errors="replace")
 
             if stdout:
-                # Extract JSON from output that may contain loading messages
                 full_result = json.loads(stdout)
                 stdout = full_result.get("stdout", None)
                 stderr = full_result.get("stderr", None)
@@ -473,17 +384,10 @@ class SyncPyodideSandbox(BasePyodideSandbox):
                 filesystem_info = full_result.get("fileSystemInfo", None)
                 filesystem_operations = full_result.get("fileSystemOperations", None)
                 
-                # Convert the Uint8Array to Python bytes
                 session_bytes_array = full_result.get("sessionBytes", None)
                 session_bytes = (
                     bytes(session_bytes_array) if session_bytes_array else None
                 )
-                
-                # Log filesystem info if available
-                if filesystem_info:
-                    logger.debug(f"Filesystem: {filesystem_info['type']} at {filesystem_info['mountPoint']}")
-                if filesystem_operations:
-                    logger.debug(f"Filesystem operations completed: {len(filesystem_operations)}")
             else:
                 stderr = stderr_bytes.decode("utf-8", errors="replace")
                 status = "error"
@@ -516,20 +420,39 @@ class SyncPyodideSandbox(BasePyodideSandbox):
         )
 
 
+# Input schema para ferramentas
+class PyodideSandboxInput(BaseModel):
+    """Input schema for PyodideSandbox tool."""
+    code: str = Field(description="Python code to execute.")
+
+
+# =============================================================================
+# CLASSE PRINCIPAL - Herda de BaseTool mas oferece acesso ao StructuredTool
+# =============================================================================
+
 class PyodideSandboxTool(BaseTool):
-    """Tool for running python code in a PyodideSandbox."""
+    """
+    Flexible PyodideSandbox tool that can be used as BaseTool or StructuredTool.
+    
+    Usage examples:
+    
+    # As BaseTool (herança direta):
+    tool = PyodideSandboxTool(enable_filesystem=True)
+    result = tool.invoke({"code": "print('Hello')"})
+    
+    # As StructuredTool (via propriedade):
+    tool = PyodideSandboxTool(enable_filesystem=True)
+    result = tool.as_structured_tool().invoke({"code": "print('Hello')"})
+    
+    # Para agents que precisam de StructuredTool:
+    agent = create_react_agent(llm, [tool.as_structured_tool()])
+    
+    # Para agents que aceitam BaseTool:
+    agent = create_react_agent(llm, [tool])
+    """
 
     name: str = "python_code_sandbox"
-    description: str = (
-        "A secure Python code sandbox with filesystem support. Use this to execute python commands.\n"
-        "- Input should be a valid python command.\n"
-        "- To return output, you should print it out with `print(...)`.\n"
-        "- Don't use f-strings when printing outputs.\n"
-        "- If you need to make web requests, use `httpx.AsyncClient`.\n"
-        "- Files can be read/written using standard Python file operations.\n"
-        "- All file operations work within a sandboxed memory filesystem."
-    )
-
+    
     # Mirror the PyodideSandbox constructor arguments
     stateful: bool = False
     allow_env: list[str] | bool = False
@@ -539,12 +462,39 @@ class PyodideSandboxTool(BaseTool):
     allow_run: list[str] | bool = False
     allow_ffi: list[str] | bool = False
     timeout_seconds: float | None
-    """Timeout for code execution in seconds. By default set to 60 seconds."""
     node_modules_dir: str = "auto"
-    enable_filesystem: bool = False  # NOVO: controle do filesystem
+    enable_filesystem: bool = False
 
-    _sandbox: PyodideSandbox
-    _sync_sandbox: SyncPyodideSandbox
+    # CORREÇÃO: Usar PrivateAttr para atributos privados no Pydantic
+    _sandbox: PyodideSandbox = PrivateAttr()
+    _sync_sandbox: SyncPyodideSandbox = PrivateAttr() 
+    _structured_tool: StructuredTool | None = PrivateAttr(default=None)
+    _stateful: bool = PrivateAttr()
+    _input_schema: type[BaseModel] = PrivateAttr()
+
+    def _build_description(self) -> str:
+        """Build the complete description string with attached files."""
+        base = (
+            "A secure Python code sandbox with filesystem support. "
+            "Use this to execute python commands.\n"
+            "- Input should be a valid python command.\n"
+            "- To return output, you should print it out with `print(...)`.\n"
+            "- Don't use f-strings when printing outputs.\n"
+            "- If you need to make web requests, use `httpx.AsyncClient`.\n"
+            "- Files can be read/written using standard Python file operations.\n"
+            "- All file operations work within a sandboxed memory filesystem.\n"
+            "- Check for attached files using: import os; print(os.listdir('.'))"
+        )
+
+        files = self._sandbox.get_attached_files()
+        if files:
+            base += "\n\n🗂️ ATTACHED FILES AVAILABLE:\n"
+            base += "\n".join(f"  • {p}" for p in files)
+            base += (
+                "\nThese files are already loaded and ready to use with pandas, "
+                "open(), etc."
+            )
+        return base
 
     def __init__(
         self,
@@ -552,28 +502,12 @@ class PyodideSandboxTool(BaseTool):
         stateful: bool = False,
         timeout_seconds: float | None = 60,
         allow_net: list[str] | bool = False,
-        enable_filesystem: bool = False,  # NOVO: habilitar filesystem explicitamente
+        enable_filesystem: bool = False,
         **kwargs: dict[str, Any],
     ) -> None:
-        """Initialize the tool.
-
-        Args:
-            stateful: Whether to use a stateful sandbox.
-            timeout_seconds: Timeout for code execution in seconds.
-            allow_net: configure network access.
-            enable_filesystem: Enable filesystem operations in the sandbox.
-                              This is automatically enabled when files are attached.
-            **kwargs: Other attributes will be passed to the PyodideSandbox
-        """
-        super().__init__(
-            stateful=stateful,
-            timeout_seconds=timeout_seconds,
-            allow_net=allow_net,
-            enable_filesystem=enable_filesystem,
-            **kwargs,
-        )
-
-        if self.stateful:
+        """Initialize the tool."""
+        
+        if stateful:
             try:
                 from langgraph.prebuilt import InjectedState
             except ImportError as e:
@@ -587,8 +521,6 @@ class PyodideSandboxTool(BaseTool):
                 """Python code to execute in the sandbox."""
 
                 code: str = Field(description="Code to execute.")
-                # these fields will be ignored by the LLM
-                # and automatically injected by LangGraph's ToolNode
                 state: Annotated[dict[str, Any] | BaseModel, InjectedState]
                 tool_call_id: Annotated[str, InjectedToolCallId]
 
@@ -599,32 +531,59 @@ class PyodideSandboxTool(BaseTool):
 
                 code: str = Field(description="Code to execute.")
 
-        self.args_schema: type[BaseModel] = PyodideSandboxToolInput
-        self._sandbox = PyodideSandbox(
-            stateful=self.stateful,
-            allow_env=self.allow_env,
-            allow_read=self.allow_read,
-            allow_write=self.allow_write,
-            allow_net=self.allow_net,
-            allow_run=self.allow_run,
-            allow_ffi=self.allow_ffi,
-            node_modules_dir=self.node_modules_dir,
-            enable_filesystem=self.enable_filesystem,  # NOVO
+        # Criar os sandboxes
+        sandbox = PyodideSandbox(
+            stateful=stateful,
+            allow_env=kwargs.get('allow_env', False),
+            allow_read=kwargs.get('allow_read', False),
+            allow_write=kwargs.get('allow_write', False),
+            allow_net=allow_net,
+            allow_run=kwargs.get('allow_run', False),
+            allow_ffi=kwargs.get('allow_ffi', False),
+            node_modules_dir=kwargs.get('node_modules_dir', 'auto'),
+            enable_filesystem=enable_filesystem,
         )
-        # Initialize sync sandbox with deno check skipped since async sandbox already
-        # checked
-        self._sync_sandbox = SyncPyodideSandbox(
-            stateful=self.stateful,
-            allow_env=self.allow_env,
-            allow_read=self.allow_read,
-            allow_write=self.allow_write,
-            allow_net=self.allow_net,
-            allow_run=self.allow_run,
-            allow_ffi=self.allow_ffi,
-            node_modules_dir=self.node_modules_dir,
-            enable_filesystem=self.enable_filesystem,  # NOVO
-            skip_deno_check=True,  # Skip deno check since async sandbox already checked
+        sync_sandbox = SyncPyodideSandbox(
+            stateful=stateful,
+            allow_env=kwargs.get('allow_env', False),
+            allow_read=kwargs.get('allow_read', False),
+            allow_write=kwargs.get('allow_write', False),
+            allow_net=allow_net,
+            allow_run=kwargs.get('allow_run', False),
+            allow_ffi=kwargs.get('allow_ffi', False),
+            node_modules_dir=kwargs.get('node_modules_dir', 'auto'),
+            enable_filesystem=enable_filesystem,
+            skip_deno_check=True,
         )
+
+        # Definir a descrição inicial
+        initial_description = (
+            "A secure Python code sandbox with filesystem support. "
+            "Use this to execute python commands.\n"
+            "- Input should be a valid python command.\n"
+            "- To return output, you should print it out with `print(...)`.\n"
+            "- Don't use f-strings when printing outputs.\n"
+            "- If you need to make web requests, use `httpx.AsyncClient`.\n"
+            "- Files can be read/written using standard Python file operations.\n"
+       )
+        
+        # Chamar super().__init__() com a descrição calculada
+        super().__init__(
+            stateful=stateful,
+            timeout_seconds=timeout_seconds,
+            allow_net=allow_net,
+            enable_filesystem=enable_filesystem,
+            description=initial_description,
+            args_schema=PyodideSandboxToolInput,
+            **kwargs,
+        )
+
+        # IMPORTANTE: Definir atributos privados APÓS super().__init__()
+        self._sandbox = sandbox
+        self._sync_sandbox = sync_sandbox
+        self._stateful = stateful
+        self._input_schema = PyodideSandboxToolInput
+        self._structured_tool = None
 
     def attach_file(
         self,
@@ -636,6 +595,11 @@ class PyodideSandboxTool(BaseTool):
         """Attach a file to the sandbox environment."""
         self._sandbox.attach_file(path, content, encoding=encoding)
         self._sync_sandbox.attach_file(path, content, encoding=encoding)
+        # Atualizar descrição em ambas as versões
+        new_description = self._build_description()
+        self.description = new_description
+        if self._structured_tool:
+            self._structured_tool.description = new_description
 
     def attach_binary_file(
         self,
@@ -645,36 +609,128 @@ class PyodideSandboxTool(BaseTool):
         """Attach a binary file to the sandbox environment."""
         self._sandbox.attach_binary_file(path, content)
         self._sync_sandbox.attach_binary_file(path, content)
+        # Atualizar descrição em ambas as versões
+        new_description = self._build_description()
+        self.description = new_description
+        if self._structured_tool:
+            self._structured_tool.description = new_description
 
     def create_directory(self, path: str) -> None:
         """Create a directory in the sandbox environment."""
         self._sandbox.create_directory(path)
         self._sync_sandbox.create_directory(path)
+        # Atualizar descrição em ambas as versões
+        new_description = self._build_description()
+        self.description = new_description
+        if self._structured_tool:
+            self._structured_tool.description = new_description
 
-    def read_file(self, path: str, *, encoding: str = "utf-8") -> None:
-        """Queue a file read operation for the next execution."""
-        self._sandbox.read_file(path, encoding=encoding)
-        self._sync_sandbox.read_file(path, encoding=encoding)
-
-    def list_directory(self, path: str = ".") -> None:
-        """Queue a directory listing operation for the next execution."""
-        self._sandbox.list_directory(path)
-        self._sync_sandbox.list_directory(path)
-
-    def remove_path(self, path: str) -> None:
-        """Queue a file/directory removal operation for the next execution."""
-        self._sandbox.remove_path(path)
-        self._sync_sandbox.remove_path(path)
-
-    def copy_path(self, source: str, destination: str) -> None:
-        """Queue a file/directory copy operation for the next execution."""
-        self._sandbox.copy_path(source, destination)
-        self._sync_sandbox.copy_path(source, destination)
+    def get_attached_files(self) -> list[str]:
+        """Get list of attached file paths."""
+        return self._sandbox.get_attached_files()
 
     def clear_filesystem_operations(self) -> None:
-        """Clear all queued filesystem operations."""
+        """Clear all filesystem operations and update description."""
         self._sandbox.clear_filesystem_operations()
         self._sync_sandbox.clear_filesystem_operations()
+        # Atualizar descrição em ambas as versões
+        new_description = self._build_description()
+        self.description = new_description
+        if self._structured_tool:
+            self._structured_tool.description = new_description
+
+    def as_structured_tool(self) -> StructuredTool:
+        """
+        Return a StructuredTool version of this tool.
+        
+        This allows users to access the tool as a StructuredTool when needed,
+        while maintaining the BaseTool interface as the primary one.
+        """
+        if self._structured_tool is None:
+            self._structured_tool = StructuredTool.from_function(
+                name=self.name,
+                description=self.description,
+                func=self._run_sync if not self._stateful else self._run_stateful_sync,
+                args_schema=self._input_schema,
+            )
+        return self._structured_tool
+
+    @property
+    def tool(self) -> StructuredTool:
+        """
+        Legacy property for backwards compatibility.
+        
+        DEPRECATED: Use as_structured_tool() instead.
+        """
+        return self.as_structured_tool()
+
+    def _run_sync(self, code: str) -> str:
+        """Synchronous execution function for non-stateful mode."""
+        result = self._sync_sandbox.execute(
+            code, timeout_seconds=self.timeout_seconds
+        )
+
+        if result.status == "error":
+            error_msg = result.stderr if result.stderr else "Execution failed with unknown error"
+            return f"Error during execution: {error_msg}"
+        
+        if result.stdout:
+            return result.stdout
+            
+        if result.result is not None:
+            return str(result.result)
+            
+        return ""
+    
+    def _run_stateful_sync(
+        self,
+        code: str,
+        state: dict[str, Any] | BaseModel,
+        tool_call_id: str,
+    ) -> Any:
+        """Synchronous execution function for stateful mode."""
+        required_keys = {"session_bytes", "session_metadata", "messages"}
+        actual_keys = set(state) if isinstance(state, dict) else set(state.__dict__)
+        if missing_keys := required_keys - actual_keys:
+            error_msg = (
+                "Input state is missing "
+                f"the following required keys: {missing_keys}"
+            )
+            raise ValueError(error_msg)
+
+        if isinstance(state, dict):
+            session_bytes = state["session_bytes"]
+            session_metadata = state["session_metadata"]
+        else:
+            session_bytes = state.session_bytes
+            session_metadata = state.session_metadata
+
+        result = self._sync_sandbox.execute(
+            code,
+            session_bytes=session_bytes,
+            session_metadata=session_metadata,
+            timeout_seconds=self.timeout_seconds,
+        )
+        
+        if result.stderr:
+            tool_result = f"Error during execution: {result.stderr}"
+        else:
+            tool_result = result.stdout
+
+        from langgraph.types import Command
+
+        return Command(
+            update={
+                "session_bytes": result.session_bytes,
+                "session_metadata": result.session_metadata,
+                "messages": [
+                    ToolMessage(
+                        content=tool_result,
+                        tool_call_id=tool_call_id,
+                    )
+                ],
+            }
+        )
 
     def _run(
         self,
@@ -683,72 +739,12 @@ class PyodideSandboxTool(BaseTool):
         tool_call_id: str | None = None,
         config: RunnableConfig | None = None,
         run_manager: CallbackManagerForToolRun | None = None,
-    ) -> Any:  # noqa: ANN401
-        """Use the tool synchronously."""
+    ) -> Any:
+        """Use the tool synchronously (BaseTool interface)."""
         if self.stateful:
-            required_keys = {"session_bytes", "session_metadata", "messages"}
-            actual_keys = set(state) if isinstance(state, dict) else set(state.__dict__)
-            if missing_keys := required_keys - actual_keys:
-                error_msg = (
-                    "Input state is missing "
-                    f"the following required keys: {missing_keys}"
-                )
-                raise ValueError(error_msg)
-
-            if isinstance(state, dict):
-                session_bytes = state["session_bytes"]
-                session_metadata = state["session_metadata"]
-            else:
-                session_bytes = state.session_bytes
-                session_metadata = state.session_metadata
-
-            result = self._sync_sandbox.execute(
-                code,
-                session_bytes=session_bytes,
-                session_metadata=session_metadata,
-                timeout_seconds=self.timeout_seconds,
-            )
-            
-            if result.stderr:
-                tool_result = f"Error during execution: {result.stderr}"
-            else:
-                tool_result = result.stdout
-
-            from langgraph.types import Command
-
-            # if the tool is used with a stateful sandbox,
-            # we need to update the graph state with the new session bytes and metadata
-            return Command(
-                update={
-                    "session_bytes": result.session_bytes,
-                    "session_metadata": result.session_metadata,
-                    "messages": [
-                        ToolMessage(
-                            content=tool_result,
-                            tool_call_id=tool_call_id,
-                        )
-                    ],
-                }
-            )
+            return self._run_stateful_sync(code, state, tool_call_id)
         else:
-            # Para sandbox não stateful
-            result = self._sync_sandbox.execute(
-                code, timeout_seconds=self.timeout_seconds
-            )
-
-            # Tratamento mais robusto de erros
-            if result.status == "error":
-                error_msg = result.stderr if result.stderr else "Execution failed with unknown error"
-                return f"Error during execution: {error_msg}"
-            
-            # Se foi sucesso, retornar stdout ou result
-            if result.stdout:
-                return result.stdout
-                
-            if result.result is not None:
-                return str(result.result)
-                
-            return ""
+            return self._run_sync(code)
 
     async def _arun(
         self,
@@ -757,8 +753,8 @@ class PyodideSandboxTool(BaseTool):
         tool_call_id: str | None = None,
         config: RunnableConfig | None = None,
         run_manager: AsyncCallbackManagerForToolRun | None = None,
-    ) -> Any:  # noqa: ANN401
-        """Use the tool asynchronously."""
+    ) -> Any:
+        """Use the tool asynchronously (BaseTool interface)."""
         if self.stateful:
             required_keys = {"session_bytes", "session_metadata", "messages"}
             actual_keys = set(state) if isinstance(state, dict) else set(state.__dict__)
@@ -790,8 +786,6 @@ class PyodideSandboxTool(BaseTool):
 
             from langgraph.types import Command
 
-            # if the tool is used with a stateful sandbox,
-            # we need to update the graph state with the new session bytes and metadata
             return Command(
                 update={
                     "session_bytes": result.session_bytes,
@@ -805,17 +799,14 @@ class PyodideSandboxTool(BaseTool):
                 }
             )
         else:
-            # Para sandbox não stateful
             result = await self._sandbox.execute(
                 code, timeout_seconds=self.timeout_seconds
             )
 
-            # Tratamento mais robusto de erros
             if result.status == "error":
                 error_msg = result.stderr if result.stderr else "Execution failed with unknown error"
                 return f"Error during execution: {error_msg}"
             
-            # Se foi sucesso, retornar stdout ou result
             if result.stdout:
                 return result.stdout
                 
@@ -823,3 +814,52 @@ class PyodideSandboxTool(BaseTool):
                 return str(result.result)
                 
             return ""
+
+
+# =============================================================================
+# WRAPPER ALTERNATIVO - Para manter compatibilidade com código existente
+# =============================================================================
+
+class PyodideSandboxDynamicTool:
+    """
+    Pure StructuredTool wrapper for PyodideSandbox (legacy compatibility).
+    
+    DEPRECATED: Use PyodideSandboxTool instead.
+    """
+    
+    def __init__(self, **kwargs):
+        """Initialize the wrapper - prefer PyodideSandboxTool instead."""
+        logger.warning(
+            "PyodideSandboxDynamicTool is deprecated. "
+            "Use PyodideSandboxTool instead."
+        )
+        self._base_tool = PyodideSandboxTool(**kwargs)
+        self.tool = self._base_tool.as_structured_tool()
+
+    def attach_file(self, path: str, content: str, *, encoding: str = "utf-8") -> None:
+        """Attach a file to the sandbox environment."""
+        self._base_tool.attach_file(path, content, encoding=encoding)
+
+    def attach_binary_file(self, path: str, content: bytes) -> None:
+        """Attach a binary file to the sandbox environment."""
+        self._base_tool.attach_binary_file(path, content)
+
+    def create_directory(self, path: str) -> None:
+        """Create a directory in the sandbox environment."""
+        self._base_tool.create_directory(path)
+
+    def get_attached_files(self) -> list[str]:
+        """Get list of attached file paths."""
+        return self._base_tool.get_attached_files()
+
+    def clear_filesystem_operations(self) -> None:
+        """Clear all filesystem operations and update description."""
+        self._base_tool.clear_filesystem_operations()
+
+    def invoke(self, input_data: dict[str, Any]) -> str:
+        """Direct invoke method for easier usage."""
+        return self.tool.invoke(input_data)
+
+    async def ainvoke(self, input_data: dict[str, Any]) -> str:
+        """Async direct invoke method for easier usage."""
+        return await self.tool.ainvoke(input_data)

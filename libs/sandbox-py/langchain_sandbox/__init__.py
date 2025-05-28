@@ -9,5 +9,5 @@ from langchain_sandbox.pyodide import (
 __all__ = [
     "PyodideSandbox",
     "PyodideSandboxTool",
-    "SyncPyodideSandbox",
+    "SyncPyodideSandbox"
 ]

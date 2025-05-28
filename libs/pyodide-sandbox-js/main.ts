@@ -615,7 +615,7 @@ async function main(): Promise<void> {
       s: "stateful",
       b: "session-bytes",
       m: "session-metadata",
-      fs: "fs-operations",
+      x: "fs-operations",
     },
     boolean: ["help", "version", "stateful"],
     default: { 
@@ -636,7 +636,7 @@ OPTIONS:
   -s, --stateful <bool>          Use a stateful session
   -b, --session-bytes <bytes>    Session bytes
   -m, --session-metadata         Session metadata
-  -fs, --fs-operations <json>    JSON array of filesystem operations
+  -x, --fs-operations <json>     JSON array of filesystem operations
   -h, --help                     Display help
   -V, --version                  Display version
 `);     
@@ -707,8 +707,8 @@ OPTIONS:
 
   // Output result
   const outputJson: any = {
-    stdout: result.stdout?.join('') || null,
-    stderr: result.success ? (result.stderr?.join('') || null) : result.error || null,
+    stdout: result.stdout?.join('\n') || null,  // <-- ADICIONAR '\n'
+    stderr: result.success ? (result.stderr?.join('\n') || null) : result.error || null,
     result: result.success ? JSON.parse(result.jsonResult || 'null') : null,
     success: result.success,
     sessionBytes: result.sessionBytes,
