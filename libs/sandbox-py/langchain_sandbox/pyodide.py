@@ -7,9 +7,6 @@ import json
 import logging
 import subprocess
 import time
-import os
-import glob
-from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from langchain_core.callbacks import (
@@ -113,93 +110,6 @@ def build_permission_flag(
     if isinstance(value, list) and value:
         return f"{flag}={','.join(value)}"
     return None
-
-
-def get_pyodide_required_paths() -> list[str]:
-    """Get the specific paths required for Pyodide to function properly.
-
-    This function automatically detects the Pyodide installation paths that need
-    read permissions instead of requiring global read access.
-
-    Returns:
-        List of specific paths that Pyodide needs to read from
-    """
-    required_paths = ["node_modules"]  # Always include node_modules
-
-    # Try to find Pyodide installation paths
-    try:
-        # Look for pyodide in common Deno cache locations
-        home_dir = Path.home()
-
-        # Common Deno cache locations
-        deno_cache_paths = [
-            home_dir / ".cache" / "deno",
-            home_dir / ".deno",
-        ]
-
-        # Also check current working directory node_modules
-        cwd_node_modules = Path.cwd() / "node_modules"
-        if cwd_node_modules.exists():
-            deno_cache_paths.append(cwd_node_modules)
-
-        # Look for relative paths in the project
-        project_paths = [
-            Path("libs/pyodide-sandbox-js/node_modules"),
-            Path("../pyodide-sandbox-js/node_modules"),
-            Path("./node_modules"),
-        ]
-
-        for project_path in project_paths:
-            if project_path.exists():
-                deno_cache_paths.append(project_path)
-
-        for cache_path in deno_cache_paths:
-            if not cache_path.exists():
-                continue
-
-            # Look for pyodide directories
-            pyodide_patterns = [
-                cache_path / "**" / "pyodide*",
-                cache_path / ".deno" / "pyodide*",
-            ]
-
-            for pattern in pyodide_patterns:
-                for pyodide_dir in glob.glob(str(pattern), recursive=True):
-                    pyodide_path = Path(pyodide_dir)
-                    if pyodide_path.is_dir():
-                        # Add the pyodide directory and its contents
-                        required_paths.append(str(pyodide_path))
-
-                        # Look for specific files that pyodide needs
-                        wasm_files = list(pyodide_path.glob("**/*.wasm"))
-                        zip_files = list(pyodide_path.glob("**/*.zip"))
-                        js_files = list(pyodide_path.glob("**/*.js"))
-
-                        # Add parent directories of essential files
-                        for file_list in [wasm_files, zip_files, js_files]:
-                            for file_path in file_list:
-                                parent_dir = str(file_path.parent)
-                                if parent_dir not in required_paths:
-                                    required_paths.append(parent_dir)
-
-    except Exception as e:
-        logger.debug(f"Error detecting Pyodide paths: {e}")
-        # Fallback to common patterns
-        fallback_paths = [
-            "~/.cache/deno",
-            "~/.deno",
-            "./node_modules",
-            "../pyodide-sandbox-js/node_modules",
-            "libs/pyodide-sandbox-js/node_modules",
-        ]
-
-        for path in fallback_paths:
-            expanded_path = os.path.expanduser(path)
-            if os.path.exists(expanded_path):
-                required_paths.append(expanded_path)
-
-    # Remove duplicates and return
-    return list(set(required_paths))
 
 
 class BasePyodideSandbox:
@@ -318,19 +228,11 @@ class BasePyodideSandbox:
 
         # Define permission configurations:
         # each tuple contains (flag, setting, defaults)
-        
-        # For read permissions, automatically include Pyodide paths if not explicitly set
-        read_defaults = ["node_modules"]
-        if allow_read is False:
-            # If read is False, add specific Pyodide paths instead of global access
-            pyodide_paths = get_pyodide_required_paths()
-            read_defaults.extend(pyodide_paths)
-            logger.debug(f"Auto-detected Pyodide paths for read access: {pyodide_paths}")
-        
         perm_defs = [
             ("--allow-env", allow_env, None),
-            # For file system permissions, use the enhanced read_defaults
-            ("--allow-read", allow_read, read_defaults),
+            # For file system permissions, if no permission is specified,
+            # force node_modules
+            ("--allow-read", allow_read, ["node_modules"]),
             ("--allow-write", allow_write, ["node_modules"]),
             ("--allow-net", allow_net, None),
             ("--allow-run", allow_run, None),
@@ -523,11 +425,6 @@ class BasePyodideSandbox:
             else:
                 cmd.extend(["-x", "[]"])
                 logger.debug("Filesystem enabled with no initial operations")
-
-        # Log the complete command for debugging
-        cmd_str = ' '.join(cmd)
-        logger.info(f"Executing Deno command: {cmd_str}")
-        print(f"🚀 DENO CMD: {cmd_str}")
 
         return cmd
 
@@ -1279,119 +1176,3 @@ class PyodideSandboxTool(BaseTool):
             )
 
         return tool_result
-
-
-class PyodideSandboxStructuredTool:
-    r"""Pure StructuredTool wrapper for PyodideSandbox with dynamic description updates.
-
-    This class provides a standalone StructuredTool interface for users who prefer
-    to work exclusively with StructuredTool rather than the main PyodideSandboxTool.
-    It maintains all the filesystem functionality and dynamic description updates.
-
-    Example usage:
-        ```python
-        from langchain_sandbox import PyodideSandboxStructuredTool
-        from langgraph.prebuilt import create_react_agent
-        from langchain_openai import ChatOpenAI
-
-        # Create tool
-        sandbox_tool = PyodideSandboxStructuredTool(
-            enable_filesystem=True,
-            allow_net=True,
-        )
-
-        # Attach files
-        sandbox_tool.attach_file("data.csv", "name,age\\nJohn,25")
-
-        # Use in agent - access via .tool property
-        agent = create_react_agent(llm, [sandbox_tool.tool])
-        ```
-    """
-
-    def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401
-        """Initialize the StructuredTool wrapper.
-
-        Args:
-            **kwargs: All arguments are passed to PyodideSandboxTool
-        """
-        self._base_tool = PyodideSandboxTool(**kwargs)
-
-    @property
-    def tool(self) -> StructuredTool:
-        """Access to the underlying StructuredTool.
-
-        Returns:
-            StructuredTool instance with current description
-        """
-        return self._base_tool.as_structured_tool()
-
-    def attach_file(
-        self,
-        path: str,
-        content: str,
-        *,
-        encoding: str = "utf-8",
-    ) -> None:
-        """Attach a text file to the sandbox environment.
-
-        Args:
-            path: File path within the sandbox filesystem
-            content: Text content of the file
-            encoding: Text encoding (default: utf-8)
-        """
-        self._base_tool.attach_file(path, content, encoding=encoding)
-
-    def attach_binary_file(
-        self,
-        path: str,
-        content: bytes,
-    ) -> None:
-        """Attach a binary file to the sandbox environment.
-
-        Args:
-            path: File path within the sandbox filesystem
-            content: Binary content of the file
-        """
-        self._base_tool.attach_binary_file(path, content)
-
-    def create_directory(self, path: str) -> None:
-        """Create a directory in the sandbox environment.
-
-        Args:
-            path: Directory path within the sandbox filesystem
-        """
-        self._base_tool.create_directory(path)
-
-    def get_attached_files(self) -> list[str]:
-        """Get list of attached file paths.
-
-        Returns:
-            List of file paths that will be available in the sandbox filesystem
-        """
-        return self._base_tool.get_attached_files()
-
-    def clear_filesystem_operations(self) -> None:
-        """Clear all attached files and directories."""
-        self._base_tool.clear_filesystem_operations()
-
-    def invoke(self, input_data: dict[str, Any]) -> str:
-        """Direct invoke method for easier usage.
-
-        Args:
-            input_data: Input data containing 'code' key
-
-        Returns:
-            Execution result as string
-        """
-        return self.tool.invoke(input_data)
-
-    async def ainvoke(self, input_data: dict[str, Any]) -> str:
-        """Async direct invoke method for easier usage.
-
-        Args:
-            input_data: Input data containing 'code' key
-
-        Returns:
-            Execution result as string
-        """
-        return await self.tool.ainvoke(input_data)
