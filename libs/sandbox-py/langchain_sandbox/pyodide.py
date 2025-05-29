@@ -7,6 +7,9 @@ import json
 import logging
 import subprocess
 import time
+import os
+import glob
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from langchain_core.callbacks import (
@@ -110,6 +113,93 @@ def build_permission_flag(
     if isinstance(value, list) and value:
         return f"{flag}={','.join(value)}"
     return None
+
+
+def get_pyodide_required_paths() -> list[str]:
+    """Get the specific paths required for Pyodide to function properly.
+
+    This function automatically detects the Pyodide installation paths that need
+    read permissions instead of requiring global read access.
+
+    Returns:
+        List of specific paths that Pyodide needs to read from
+    """
+    required_paths = ["node_modules"]  # Always include node_modules
+
+    # Try to find Pyodide installation paths
+    try:
+        # Look for pyodide in common Deno cache locations
+        home_dir = Path.home()
+
+        # Common Deno cache locations
+        deno_cache_paths = [
+            home_dir / ".cache" / "deno",
+            home_dir / ".deno",
+        ]
+
+        # Also check current working directory node_modules
+        cwd_node_modules = Path.cwd() / "node_modules"
+        if cwd_node_modules.exists():
+            deno_cache_paths.append(cwd_node_modules)
+
+        # Look for relative paths in the project
+        project_paths = [
+            Path("libs/pyodide-sandbox-js/node_modules"),
+            Path("../pyodide-sandbox-js/node_modules"),
+            Path("./node_modules"),
+        ]
+
+        for project_path in project_paths:
+            if project_path.exists():
+                deno_cache_paths.append(project_path)
+
+        for cache_path in deno_cache_paths:
+            if not cache_path.exists():
+                continue
+
+            # Look for pyodide directories
+            pyodide_patterns = [
+                cache_path / "**" / "pyodide*",
+                cache_path / ".deno" / "pyodide*",
+            ]
+
+            for pattern in pyodide_patterns:
+                for pyodide_dir in glob.glob(str(pattern), recursive=True):
+                    pyodide_path = Path(pyodide_dir)
+                    if pyodide_path.is_dir():
+                        # Add the pyodide directory and its contents
+                        required_paths.append(str(pyodide_path))
+
+                        # Look for specific files that pyodide needs
+                        wasm_files = list(pyodide_path.glob("**/*.wasm"))
+                        zip_files = list(pyodide_path.glob("**/*.zip"))
+                        js_files = list(pyodide_path.glob("**/*.js"))
+
+                        # Add parent directories of essential files
+                        for file_list in [wasm_files, zip_files, js_files]:
+                            for file_path in file_list:
+                                parent_dir = str(file_path.parent)
+                                if parent_dir not in required_paths:
+                                    required_paths.append(parent_dir)
+
+    except Exception as e:
+        logger.debug(f"Error detecting Pyodide paths: {e}")
+        # Fallback to common patterns
+        fallback_paths = [
+            "~/.cache/deno",
+            "~/.deno",
+            "./node_modules",
+            "../pyodide-sandbox-js/node_modules",
+            "libs/pyodide-sandbox-js/node_modules",
+        ]
+
+        for path in fallback_paths:
+            expanded_path = os.path.expanduser(path)
+            if os.path.exists(expanded_path):
+                required_paths.append(expanded_path)
+
+    # Remove duplicates and return
+    return list(set(required_paths))
 
 
 class BasePyodideSandbox:
@@ -228,11 +318,19 @@ class BasePyodideSandbox:
 
         # Define permission configurations:
         # each tuple contains (flag, setting, defaults)
+        
+        # For read permissions, automatically include Pyodide paths if not explicitly set
+        read_defaults = ["node_modules"]
+        if allow_read is False:
+            # If read is False, add specific Pyodide paths instead of global access
+            pyodide_paths = get_pyodide_required_paths()
+            read_defaults.extend(pyodide_paths)
+            logger.debug(f"Auto-detected Pyodide paths for read access: {pyodide_paths}")
+        
         perm_defs = [
             ("--allow-env", allow_env, None),
-            # For file system permissions, if no permission is specified,
-            # force node_modules
-            ("--allow-read", allow_read, ["node_modules"]),
+            # For file system permissions, use the enhanced read_defaults
+            ("--allow-read", allow_read, read_defaults),
             ("--allow-write", allow_write, ["node_modules"]),
             ("--allow-net", allow_net, None),
             ("--allow-run", allow_run, None),
@@ -425,6 +523,11 @@ class BasePyodideSandbox:
             else:
                 cmd.extend(["-x", "[]"])
                 logger.debug("Filesystem enabled with no initial operations")
+
+        # Log the complete command for debugging
+        cmd_str = ' '.join(cmd)
+        logger.info(f"Executing Deno command: {cmd_str}")
+        print(f"🚀 DENO CMD: {cmd_str}")
 
         return cmd
 
