@@ -141,6 +141,49 @@ result = await agent.ainvoke(
 )
 ```
 
+### File System Support
+
+You can now attach files to the sandbox environment and perform data analysis:
+
+```python
+import asyncio
+
+from langchain_sandbox import PyodideSandboxTool
+from langgraph.prebuilt import create_react_agent
+
+# Define the sandbox tool with filesystem support
+sandbox_tool = PyodideSandboxTool(
+    enable_filesystem=True,
+    allow_net=True,
+)
+
+sales_data = """...csv_data"""
+
+sandbox_tool.attach_file("sales.csv", sales_data)
+
+# Create an agent with the sandbox tool
+agent = create_react_agent(
+    "anthropic:claude-3-7-sonnet-latest", [sandbox_tool]
+)
+
+query = """Please analyze the sales data and tell me:
+1. What is the total revenue by category?
+2. Which region has the highest sales?
+3. What are the top 3 best-selling products by revenue?
+
+Use pandas to read the CSV file and perform the analysis."""
+
+async def run_agent(query: str):
+    # Stream agent outputs
+    async for chunk in agent.astream({"messages": query}):
+        print(chunk)
+        print("\n")
+
+if __name__ == "__main__":
+    # Run the agent
+    asyncio.run(run_agent(query))
+```
+
 #### Stateful Tool
 
 > [!important]
@@ -192,12 +235,11 @@ second_result = await agent.ainvoke(
 )
 ```
 
-
-
 See full examples here:
 
 * [ReAct agent](examples/react_agent.py)
 * [CodeAct agent](examples/codeact_agent.py)
+* [ReAct agent with csv](examples/react_agent_with_csv.py)
 
 ## 🧩 Components
 
