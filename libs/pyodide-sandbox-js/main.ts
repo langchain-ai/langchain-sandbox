@@ -621,8 +621,27 @@ async function runPython(
 }
 
 async function main(): Promise<void> {
+  // Ler dados do stdin primeiro
+  let stdinData: any = {};
+  
+  // Verificar se há dados disponíveis no stdin (não é um terminal)
+  if (!Deno.isatty(Deno.stdin.rid)) {
+    const buffer = new Uint8Array(50 * 1024 * 1024);  // Buffer de 50MB
+    const bytesRead = await Deno.stdin.read(buffer);
+    
+    if (bytesRead) {
+      try {
+        const stdinText = new TextDecoder().decode(buffer.subarray(0, bytesRead));
+        stdinData = JSON.parse(stdinText);
+      } catch (error) {
+        console.error("Error parsing stdin data:", error);
+        Deno.exit(1);
+      }
+    }
+  }
+
   const flags = parseArgs(Deno.args, {
-    string: ["code", "file", "session-bytes", "session-metadata", "fs-operations"],
+    string: ["code", "file", "session-bytes", "session-metadata"],
     alias: {
       c: "code",
       f: "file",
@@ -631,7 +650,7 @@ async function main(): Promise<void> {
       s: "stateful",
       b: "session-bytes",
       m: "session-metadata",
-      x: "fs-operations",
+      // Removido x: "fs-operations" - agora vem do stdin
     },
     boolean: ["help", "version", "stateful"],
     default: { 
@@ -652,7 +671,6 @@ OPTIONS:
   -s, --stateful <bool>          Use a stateful session
   -b, --session-bytes <bytes>    Session bytes
   -m, --session-metadata         Session metadata
-  -x, --fs-operations <json>     JSON array of filesystem operations
   -h, --help                     Display help
   -V, --version                  Display version
 `);     
@@ -668,9 +686,8 @@ OPTIONS:
     code: flags.code,
     file: flags.file,
     stateful: flags.stateful,
-    sessionBytes: flags["session-bytes"],
-    sessionMetadata: flags["session-metadata"],
-    fsOperations: flags["fs-operations"],
+    sessionBytes: flags["session-bytes"] || (stdinData.sessionBytes ? JSON.stringify(stdinData.sessionBytes) : null),
+    sessionMetadata: flags["session-metadata"] || stdinData.sessionMetadata,
   };
 
   if (!options.code && !options.file) {
@@ -700,14 +717,10 @@ OPTIONS:
     pythonCode = options.code?.replace(/\\n/g, "\n") ?? "";
   }
 
+  // Extrair as operações de filesystem do stdin
   let fileSystemOperations: FileSystemOperation[] = [];
-  if (options.fsOperations) {
-    try {
-      fileSystemOperations = JSON.parse(options.fsOperations);
-    } catch (error: unknown) {
-      console.error("Error parsing filesystem operations:", error instanceof Error ? error.message : String(error));
-      Deno.exit(1);
-    }
+  if (stdinData.fileSystemOperations && Array.isArray(stdinData.fileSystemOperations)) {
+    fileSystemOperations = stdinData.fileSystemOperations;
   }
 
   const runOptions: any = {
@@ -716,7 +729,7 @@ OPTIONS:
     sessionMetadata: options.sessionMetadata,
   };
 
-  // Enable filesystem if operations are provided
+  // Habilitar sistema de arquivos se operações foram fornecidas
   if (fileSystemOperations.length > 0) {
     runOptions.fileSystemOptions = {
       enableFileSystem: true,
