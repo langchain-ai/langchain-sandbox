@@ -62,6 +62,8 @@ def test_pyodide_sandbox_tool() -> None:
     tool = PyodideSandboxTool(
         enable_filesystem=True,
         allow_net=True,
+        allow_read=True,
+        allow_write=True,
     )
     result = tool.invoke({"code": "x = 5; print(x)"})
     assert result == "5"
@@ -74,6 +76,8 @@ def test_pyodide_timeout() -> None:
     tool = PyodideSandboxTool(
         enable_filesystem=True,
         allow_net=True,
+        allow_read=True,
+        allow_write=True,
         timeout_seconds=0.1,
     )
     result = tool.invoke({"code": "while True: pass"})
@@ -85,6 +89,8 @@ async def test_async_pyodide_sandbox_tool() -> None:
     tool = PyodideSandboxTool(
         enable_filesystem=True,
         allow_net=True,
+        allow_read=True,
+        allow_write=True,
     )
     result = await tool.ainvoke({"code": "x = 5; print(x)"})
     assert result == "5"
@@ -97,6 +103,8 @@ async def test_async_pyodide_timeout() -> None:
     tool = PyodideSandboxTool(
         enable_filesystem=True,
         allow_net=True,
+        allow_read=True,
+        allow_write=True,
         timeout_seconds=0.1,
     )
     result = await tool.ainvoke({"code": "while True: pass"})
@@ -227,6 +235,8 @@ async def test_filesystem_basic_operations(pyodide_package: None) -> None:
     sandbox = PyodideSandbox(
         enable_filesystem=True,
         allow_net=True,
+        allow_read=True,
+        allow_write=True,
     )
 
     # Attach files
@@ -276,6 +286,8 @@ def test_filesystem_tool_usage() -> None:
     tool = PyodideSandboxTool(
         enable_filesystem=True,
         allow_net=True,
+        allow_read=True,
+        allow_write=True,
     )
 
     # Attach CSV data
@@ -305,6 +317,8 @@ async def test_binary_file_operations(pyodide_package: None) -> None:
     sandbox = PyodideSandbox(
         enable_filesystem=True,
         allow_net=True,
+        allow_read=True,
+        allow_write=True,
     )
 
     # Create some binary data

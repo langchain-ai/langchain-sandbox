@@ -85,8 +85,8 @@ class FileSystemOperation:
 
 
 # Published package name
-PKG_NAME = "jsr:@langchain/pyodide-sandbox@0.0.4"
-# PKG_NAME = "../pyodide-sandbox-js/main.ts"  # noqa: ERA001
+# PKG_NAME = "jsr:@langchain/pyodide-sandbox@0.0.4"
+PKG_NAME = "../pyodide-sandbox-js/main.ts"  # noqa: ERA001
 
 
 def build_permission_flag(
@@ -375,7 +375,7 @@ class BasePyodideSandbox:
         session_metadata: dict | None = None,
         memory_limit_mb: int | None = None,
     ) -> list[str]:
-        """Build the Deno command with all necessary arguments.
+        """Build the Deno command with necessary arguments, using stdin for file operations.
 
         Args:
             code: The Python code to execute
@@ -414,18 +414,7 @@ class BasePyodideSandbox:
 
         if session_metadata:
             cmd.extend(["-m", json.dumps(session_metadata)])
-
-        # Add filesystem operations if any are queued
-        if self._filesystem_operations or self.enable_filesystem:
-            if self._filesystem_operations:
-                fs_ops = [op.to_dict() for op in self._filesystem_operations]
-                fs_json = json.dumps(fs_ops, ensure_ascii=True, separators=(",", ":"))
-                cmd.extend(["-x", fs_json])
-                logger.debug("Filesystem enabled with %d operations", len(fs_ops))
-            else:
-                cmd.extend(["-x", "[]"])
-                logger.debug("Filesystem enabled with no initial operations")
-
+        
         return cmd
 
 
@@ -479,7 +468,24 @@ class PyodideSandbox(BasePyodideSandbox):
             memory_limit_mb=memory_limit_mb,
         )
 
-        # Create and run the subprocess
+        # Preparar dados para envio via stdin
+        stdin_data = {
+            "fileSystemOperations": [op.to_dict() for op in self._filesystem_operations] 
+                                   if self._filesystem_operations else []
+        }
+        
+        # Codificar dados para stdin
+        stdin_json = json.dumps(stdin_data).encode("utf-8")
+
+        # Corrigido: Não usar stdin com asyncio devido a problemas de compatibilidade
+        # Usaremos temporariamente uma abordagem de argumento até resolver o problema de stdin
+        # na versão assíncrona
+        fs_ops_json = json.dumps([op.to_dict() for op in self._filesystem_operations])
+        # Adicionar dados de filesystem ao comando
+        if self._filesystem_operations or self.enable_filesystem:
+            cmd.extend(["-x", fs_ops_json])
+            
+        # Create and run the subprocess 
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -591,13 +597,23 @@ class SyncPyodideSandbox(BasePyodideSandbox):
             memory_limit_mb=memory_limit_mb,
         )
 
+        # Preparar dados para envio via stdin
+        stdin_data = {
+            "fileSystemOperations": [op.to_dict() for op in self._filesystem_operations] 
+                                   if self._filesystem_operations else []
+        }
+        
+        # Codificar dados para stdin
+        stdin_json = json.dumps(stdin_data).encode("utf-8")
+
         try:
-            # Run the subprocess with timeout
+            # Run the subprocess with timeout and stdin data
             # Ignoring S603 for subprocess.run as the cmd is built safely.
             # Untrusted input comes from `code` parameter, which should be
             # escaped properly as we are **not** using shell=True.
             process = subprocess.run(  # noqa: S603
                 cmd,
+                input=stdin_json,  # Passar dados via stdin
                 capture_output=True,
                 text=False,  # Keep as bytes for proper decoding
                 timeout=timeout_seconds,
@@ -997,6 +1013,7 @@ class PyodideSandboxTool(BaseTool):
             return f"Error during execution: {error_msg}"
 
         if result.stdout:
+            # Ensure newlines are preserved
             return result.stdout
 
         if result.result is not None:
