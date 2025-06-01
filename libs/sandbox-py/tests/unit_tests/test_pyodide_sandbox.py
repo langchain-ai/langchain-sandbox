@@ -57,56 +57,6 @@ def get_default_sync_sandbox(stateful: bool = False) -> SyncPyodideSandbox:
     )
 
 
-def test_pyodide_sandbox_tool(pyodide_package: None) -> None:
-    """Test synchronous invocation of PyodideSandboxTool."""
-    tool = PyodideSandboxTool(
-        allow_net=True,
-        allow_read=True,
-        allow_write=True,
-    )
-    result = tool.invoke({"code": "x = 5; print(x)"})
-    assert result == "5"
-    result = tool.invoke({"code": "x = 5; print(1); print(2)"})
-    assert result == "1\n2"
-
-
-def test_pyodide_timeout() -> None:
-    """Test synchronous invocation of PyodideSandboxTool with timeout."""
-    tool = PyodideSandboxTool(
-        allow_net=True,
-        allow_read=True,
-        allow_write=True,
-        timeout_seconds=0.1,
-    )
-    result = tool.invoke({"code": "while True: pass"})
-    assert "timed out after 0.1 seconds" in result
-
-
-async def test_async_pyodide_sandbox_tool(pyodide_package: None) -> None:
-    """Test asynchronous invocation of PyodideSandboxTool."""
-    tool = PyodideSandboxTool(
-        allow_net=True,
-        allow_read=True,
-        allow_write=True,
-    )
-    result = await tool.ainvoke({"code": "x = 5; print(x)"})
-    assert result == "5"
-    result = await tool.ainvoke({"code": "x = 5; print(1); print(2)"})
-    assert result == "1\n2"
-
-
-async def test_async_pyodide_timeout() -> None:
-    """Test asynchronous invocation of PyodideSandboxTool with timeout."""
-    tool = PyodideSandboxTool(
-        allow_net=True,
-        allow_read=True,
-        allow_write=True,
-        timeout_seconds=0.1,
-    )
-    result = await tool.ainvoke({"code": "while True: pass"})
-    assert "timed out after 0.1 seconds" in result
-
-
 async def test_stdout_sessionless(pyodide_package: None) -> None:
     """Test without a session ID."""
     sandbox = get_default_sandbox()
@@ -226,13 +176,55 @@ def test_sync_pyodide_sandbox_timeout(pyodide_package: None) -> None:
     assert "timed out" in result.stderr.lower()
 
 
+def test_pyodide_sandbox_tool(pyodide_package: None) -> None:
+    """Test synchronous invocation of PyodideSandboxTool."""
+    tool = PyodideSandboxTool(
+        stateful=False,
+        allow_net=True,
+    )
+    result = tool.invoke({"code": "x = 5; print(x)"})
+    assert result == "5"
+    result = tool.invoke({"code": "x = 5; print(1); print(2)"})
+    assert result == "1\n2"
+
+
+def test_pyodide_timeout() -> None:
+    """Test synchronous invocation of PyodideSandboxTool with timeout."""
+    tool = PyodideSandboxTool(
+        stateful=False,
+        allow_net=True,
+        timeout_seconds=0.1,
+    )
+    result = tool.invoke({"code": "while True: pass"})
+    assert "timed out after 0.1 seconds" in result
+
+
+async def test_async_pyodide_sandbox_tool(pyodide_package: None) -> None:
+    """Test asynchronous invocation of PyodideSandboxTool."""
+    tool = PyodideSandboxTool(
+        stateful=False,
+        allow_net=True,
+    )
+    result = await tool.ainvoke({"code": "x = 5; print(x)"})
+    assert result == "5"
+    result = await tool.ainvoke({"code": "x = 5; print(1); print(2)"})
+    assert result == "1\n2"
+
+
+async def test_async_pyodide_timeout() -> None:
+    """Test asynchronous invocation of PyodideSandboxTool with timeout."""
+    tool = PyodideSandboxTool(
+        stateful=False,
+        allow_net=True,
+        timeout_seconds=0.1,
+    )
+    result = await tool.ainvoke({"code": "while True: pass"})
+    assert "timed out after 0.1 seconds" in result
+
+
 async def test_filesystem_basic_operations(pyodide_package: None) -> None:
     """Test basic filesystem operations."""
-    sandbox = PyodideSandbox(
-        allow_net=True,
-        allow_read=True,
-        allow_write=True,
-    )
+    sandbox = PyodideSandbox(allow_net=True)
 
     # Attach files
     sandbox.attach_file("test.txt", "Hello, World!")
@@ -278,11 +270,7 @@ print(f"Created file content: {created_content}")
 
 def test_filesystem_tool_usage(pyodide_package: None) -> None:
     """Test filesystem with PyodideSandboxTool."""
-    tool = PyodideSandboxTool(
-        allow_net=True,
-        allow_read=True,
-        allow_write=True,
-    )
+    tool = PyodideSandboxTool(allow_net=True)
 
     # Attach CSV data
     csv_data = "name,age\nAlice,30\nBob,25"
@@ -308,11 +296,7 @@ for user in users:
 
 async def test_binary_file_operations(pyodide_package: None) -> None:
     """Test binary file operations."""
-    sandbox = PyodideSandbox(
-        allow_net=True,
-        allow_read=True,
-        allow_write=True,
-    )
+    sandbox = PyodideSandbox(allow_net=True)
 
     # Create some binary data
     binary_data = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
@@ -343,10 +327,7 @@ print(f"Size: {size} bytes")
 
 async def test_large_file_attachment(pyodide_package: None) -> None:
     """Test attaching a large file to the sandbox."""
-    sandbox = PyodideSandbox(
-        allow_read=True,
-        allow_write=True,
-    )
+    sandbox = PyodideSandbox(allow_net=True)
 
     # Generate a test file with a simple pattern
     size_mb = 5  # 5MB is sufficient to test streaming

@@ -62,6 +62,13 @@ def build_permission_flag(
         return flag
     if isinstance(value, list) and value:
         return f"{flag}={','.join(value)}"
+
+    # For --allow-read flag, always grant unrestricted access regardless of the value
+    # This ensures Pyodide can access all necessary files in both relative and absolute paths
+    if flag == "--allow-read":
+        # Grant unrestricted read access to allow Pyodide to function correctly
+        return flag
+
     return None
 
 

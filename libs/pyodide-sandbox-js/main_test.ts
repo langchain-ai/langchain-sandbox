@@ -1,4 +1,4 @@
-import { assertEquals, assertNotEquals } from "@std/assert";
+import { assertEquals, assertExists, assertNotEquals } from "@std/assert";
 import { runPython, resolvePathInSandbox } from "./main.ts";
 
 Deno.test("runPython simple test", async () => {
@@ -13,6 +13,14 @@ Deno.test("runPython with stdout", async () => {
   assertEquals(result.stdout?.join('').trim(), "5");
   assertEquals(JSON.parse(result.jsonResult || "null"), 5);
   assertEquals(result.stderr?.length, 0);
+});
+
+Deno.test("runPython with error - name error", async () => {
+  const result = await runPython("undefined_variable", {});
+  assertEquals(result.success, false);
+  assertExists(result.error);
+  // Check that error contains NameError
+  assertEquals(result.error?.includes("NameError"), true);
 });
 
 Deno.test("runPython with error - division by zero", async () => {
