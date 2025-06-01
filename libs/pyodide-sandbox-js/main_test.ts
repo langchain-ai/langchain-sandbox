@@ -1,5 +1,5 @@
 import { assertEquals, assertNotEquals } from "@std/assert";
-import { runPython, resolvePathInSandbox, type FileSystemOperation } from "./main.ts";
+import { runPython, resolvePathInSandbox } from "./main.ts";
 
 Deno.test("runPython simple test", async () => {
   const result = await runPython("x = 2 + 3; x", {});
@@ -10,7 +10,7 @@ Deno.test("runPython simple test", async () => {
 Deno.test("runPython with stdout", async () => {
   const result = await runPython("x = 5; print(x); x", {});
   assertEquals(result.success, true);
-  assertEquals(result.stdout?.join(''), "5");
+  assertEquals(result.stdout?.join('').trim(), "5");
   assertEquals(JSON.parse(result.jsonResult || "null"), 5);
   assertEquals(result.stderr?.length, 0);
 });
@@ -36,25 +36,128 @@ Deno.test("resolvePathInSandbox - basic resolution", () => {
   assertEquals(resolvePathInSandbox("/tmp/absolute.txt"), "/tmp/absolute.txt");
 });
 
+// Helper function to create stdin data for filesystem operations
+function createFilesystemStdin(
+  files: Array<{ path: string; content: string | Uint8Array; binary?: boolean }>,
+  directories: string[] = []
+): Uint8Array {
+  // Convert files to the expected format
+  const fileInfos = files.map(f => {
+    const contentBytes = typeof f.content === 'string' 
+      ? new TextEncoder().encode(f.content)
+      : f.content;
+    
+    return {
+      path: f.path,
+      size: contentBytes.length,
+      binary: f.binary || false,
+      content: contentBytes
+    };
+  });
+
+  // Create metadata
+  const metadata = {
+    files: fileInfos.map(f => ({
+      path: f.path,
+      size: f.size,
+      binary: f.binary
+    })),
+    directories: directories
+  };
+
+  const metadataJson = new TextEncoder().encode(JSON.stringify(metadata));
+  
+  // Create header: "PSB" + version + metadata size (4 bytes)
+  const header = new Uint8Array(8);
+  header.set(new TextEncoder().encode("PSB"), 0);
+  header[3] = 1; // version
+  
+  // Set metadata length (big endian)
+  const dataView = new DataView(header.buffer);
+  dataView.setUint32(4, metadataJson.length, false);
+
+  // Combine header + metadata + file contents
+  const totalSize = header.length + metadataJson.length + 
+    fileInfos.reduce((sum, f) => sum + f.content.length, 0);
+  
+  const result = new Uint8Array(totalSize);
+  let offset = 0;
+  
+  result.set(header, offset);
+  offset += header.length;
+  
+  result.set(metadataJson, offset);
+  offset += metadataJson.length;
+  
+  for (const fileInfo of fileInfos) {
+    result.set(fileInfo.content, offset);
+    offset += fileInfo.content.length;
+  }
+  
+  return result;
+}
+
+// Mock Deno.stdin for filesystem tests
+async function runPythonWithFiles(
+  code: string,
+  files: Array<{ path: string; content: string | Uint8Array; binary?: boolean }> = [],
+  directories: string[] = [],
+  options: Record<string, unknown> = {}
+) {
+  if (files.length === 0 && directories.length === 0) {
+    return await runPython(code, options);
+  }
+
+  // Create the stdin data
+  const stdinData = createFilesystemStdin(files, directories);
+  
+  // Mock stdin for this test
+  const originalIsTerminal = Deno.stdin.isTerminal;
+  const originalRead = Deno.stdin.read;
+  let dataOffset = 0;
+  
+  // Mock isTerminal to return false (indicating we have stdin data)
+  Deno.stdin.isTerminal = () => false;
+  
+  // Mock stdin.read to return our data
+  Deno.stdin.read = (buffer: Uint8Array): Promise<number | null> => {
+    if (dataOffset >= stdinData.length) {
+      return Promise.resolve(null);
+    }
+    
+    const remaining = stdinData.length - dataOffset;
+    const toRead = Math.min(buffer.length, remaining);
+    
+    buffer.set(stdinData.subarray(dataOffset, dataOffset + toRead));
+    dataOffset += toRead;
+    
+    return Promise.resolve(toRead);
+  };
+  
+  try {
+    return await runPython(code, options);
+  } finally {
+    // Restore original functions
+    Deno.stdin.isTerminal = originalIsTerminal;
+    Deno.stdin.read = originalRead;
+  }
+}
+
 Deno.test("FileSystem - operations", async () => {
-  const operations: FileSystemOperation[] = [
+  const files = [
     {
-      operation: "write",
       path: "config.json",
-      content: '{"app": "test", "version": "1.0"}',
+      content: '{"app": "test", "version": "1.0"}'
     },
     {
-      operation: "mkdir",
-      path: "data",
-    },
-    {
-      operation: "write",
       path: "data/output.txt",
-      content: "Hello World\nLine 2",
+      content: "Hello World\nLine 2"
     }
   ];
+  
+  const directories = ["data"];
 
-  const result = await runPython(`
+  const result = await runPythonWithFiles(`
 import os
 import json
 
@@ -79,9 +182,7 @@ result = {
 }
 
 result
-  `, {
-    fileSystemOperations: operations
-  });
+  `, files, directories);
 
   assertEquals(result.success, true);
   const resultObj = JSON.parse(result.jsonResult || "null");
@@ -94,28 +195,26 @@ result
 });
 
 Deno.test("FileSystem - binary operations", async () => {
-  const operations: FileSystemOperation[] = [
+  // Create binary content - "Binary data" encoded as bytes
+  const binaryContent = new TextEncoder().encode("Binary data");
+  
+  const files = [
     {
-      operation: "write",
       path: "test.bin",
-      content: "QmluYXJ5IGRhdGE=", // Base64 for "Binary data"
-      encoding: "binary"
+      content: binaryContent,
+      binary: true
     }
   ];
 
-  const result = await runPython(`
+  const result = await runPythonWithFiles(`
 import os
-import base64
 
 # Read binary file
 with open("test.bin", "rb") as f:
     binary_content = f.read()
 
 # Decode content
-try:
-    decoded = binary_content.decode('utf-8')
-except UnicodeDecodeError:
-    decoded = base64.b64decode(binary_content).decode('utf-8')
+decoded = binary_content.decode('utf-8')
 
 result = {
     "file_exists": os.path.exists("test.bin"),
@@ -125,9 +224,7 @@ result = {
 }
 
 result
-  `, {
-    fileSystemOperations: operations
-  });
+  `, files);
 
   assertEquals(result.success, true);
   const resultObj = JSON.parse(result.jsonResult || "null");
@@ -138,28 +235,20 @@ result
 });
 
 Deno.test("FileSystem - memfs directory structure", async () => {
-  const operations: FileSystemOperation[] = [
+  const files = [
     {
-      operation: "mkdir",
-      path: "project",
-    },
-    {
-      operation: "mkdir", 
-      path: "project/src",
-    },
-    {
-      operation: "write",
       path: "project/src/main.py",
-      content: "print('Hello from memfs!')",
+      content: "print('Hello from memfs!')"
     },
     {
-      operation: "write",
       path: "project/README.md",
-      content: "# My Project\nRunning in memfs",
+      content: "# My Project\nRunning in memfs"
     }
   ];
+  
+  const directories = ["project", "project/src"];
 
-  const result = await runPython(`
+  const result = await runPythonWithFiles(`
 import os
 
 # Navigate and check structure
@@ -192,9 +281,7 @@ result = {
 }
 
 result
-  `, {
-    fileSystemOperations: operations
-  });
+  `, files, directories);
 
   assertEquals(result.success, true);
   const resultObj = JSON.parse(result.jsonResult || "null");

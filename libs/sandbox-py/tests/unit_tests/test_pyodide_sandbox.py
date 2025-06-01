@@ -57,10 +57,9 @@ def get_default_sync_sandbox(stateful: bool = False) -> SyncPyodideSandbox:
     )
 
 
-def test_pyodide_sandbox_tool() -> None:
+def test_pyodide_sandbox_tool(pyodide_package: None) -> None:
     """Test synchronous invocation of PyodideSandboxTool."""
     tool = PyodideSandboxTool(
-        enable_filesystem=True,
         allow_net=True,
         allow_read=True,
         allow_write=True,
@@ -74,7 +73,6 @@ def test_pyodide_sandbox_tool() -> None:
 def test_pyodide_timeout() -> None:
     """Test synchronous invocation of PyodideSandboxTool with timeout."""
     tool = PyodideSandboxTool(
-        enable_filesystem=True,
         allow_net=True,
         allow_read=True,
         allow_write=True,
@@ -84,10 +82,9 @@ def test_pyodide_timeout() -> None:
     assert "timed out after 0.1 seconds" in result
 
 
-async def test_async_pyodide_sandbox_tool() -> None:
+async def test_async_pyodide_sandbox_tool(pyodide_package: None) -> None:
     """Test asynchronous invocation of PyodideSandboxTool."""
     tool = PyodideSandboxTool(
-        enable_filesystem=True,
         allow_net=True,
         allow_read=True,
         allow_write=True,
@@ -101,7 +98,6 @@ async def test_async_pyodide_sandbox_tool() -> None:
 async def test_async_pyodide_timeout() -> None:
     """Test asynchronous invocation of PyodideSandboxTool with timeout."""
     tool = PyodideSandboxTool(
-        enable_filesystem=True,
         allow_net=True,
         allow_read=True,
         allow_write=True,
@@ -114,7 +110,7 @@ async def test_async_pyodide_timeout() -> None:
 async def test_stdout_sessionless(pyodide_package: None) -> None:
     """Test without a session ID."""
     sandbox = get_default_sandbox()
-    # Execute a simple piece of code synchronously
+    # Execute a simple piece of code asynchronously
     result = await sandbox.execute("x = 5; print(x); x")
     assert result.status == "success"
     assert result.stdout == "5"
@@ -143,7 +139,7 @@ async def test_session_state_persistence_basic(pyodide_package: None) -> None:
     assert result1.result is None
     assert result2.status == "success", f"Encountered error: {result2.stderr}"
     assert result2.stdout == "10"
-    assert result1.result is None
+    assert result2.result is None
 
 
 async def test_pyodide_sandbox_error_handling(pyodide_package: None) -> None:
@@ -201,7 +197,7 @@ def test_sync_session_state_persistence_basic(pyodide_package: None) -> None:
     assert result1.result is None
     assert result2.status == "success", f"Encountered error: {result2.stderr}"
     assert result2.stdout == "10"
-    assert result1.result is None
+    assert result2.result is None
 
 
 def test_sync_pyodide_sandbox_error_handling(pyodide_package: None) -> None:
@@ -233,7 +229,6 @@ def test_sync_pyodide_sandbox_timeout(pyodide_package: None) -> None:
 async def test_filesystem_basic_operations(pyodide_package: None) -> None:
     """Test basic filesystem operations."""
     sandbox = PyodideSandbox(
-        enable_filesystem=True,
         allow_net=True,
         allow_read=True,
         allow_write=True,
@@ -281,10 +276,9 @@ print(f"Created file content: {created_content}")
     assert "Processing complete!" in result.stdout
 
 
-def test_filesystem_tool_usage() -> None:
+def test_filesystem_tool_usage(pyodide_package: None) -> None:
     """Test filesystem with PyodideSandboxTool."""
     tool = PyodideSandboxTool(
-        enable_filesystem=True,
         allow_net=True,
         allow_read=True,
         allow_write=True,
@@ -315,7 +309,6 @@ for user in users:
 async def test_binary_file_operations(pyodide_package: None) -> None:
     """Test binary file operations."""
     sandbox = PyodideSandbox(
-        enable_filesystem=True,
         allow_net=True,
         allow_read=True,
         allow_write=True,
@@ -323,7 +316,8 @@ async def test_binary_file_operations(pyodide_package: None) -> None:
 
     # Create some binary data
     binary_data = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-    sandbox.attach_binary_file("image.png", binary_data)
+    # Use attach_file which supports binary data
+    sandbox.attach_file("image.png", binary_data)
 
     code = """
 import base64
@@ -338,7 +332,6 @@ size = len(data)
 
 print(f"Is PNG: {is_png}")
 print(f"Size: {size} bytes")
-print(f"Original size: {len(data)}")  # Debug
 """
 
     result = await sandbox.execute(code)
@@ -346,3 +339,41 @@ print(f"Original size: {len(data)}")  # Debug
     assert "Is PNG: True" in result.stdout
     # Verify the size matches the binary data size
     assert f"Size: {len(binary_data)} bytes" in result.stdout
+
+
+async def test_large_file_attachment(pyodide_package: None) -> None:
+    """Test attaching a large file to the sandbox."""
+    sandbox = PyodideSandbox(
+        allow_read=True,
+        allow_write=True,
+    )
+
+    # Generate a test file with a simple pattern
+    size_mb = 5  # 5MB is sufficient to test streaming
+    size_bytes = size_mb * 1024 * 1024
+
+    # Generate test content
+    large_data = bytes([i % 256 for i in range(size_bytes)])
+
+    sandbox.attach_file("large_file.bin", large_data)
+
+    # Verify that the file was attached correctly
+    code = """
+import os
+
+file_path = "large_file.bin"
+exists = os.path.exists(file_path)
+size = os.path.getsize(file_path) if exists else 0
+
+print(f"File exists: {exists}")
+print(f"File size: {size} bytes")
+print("Verification completed successfully!")
+"""
+
+    # Execute the code that verifies the file
+    result = await sandbox.execute(code)
+
+    assert result.status == "success", f"Failed to verify file: {result.stderr}"
+    assert "File exists: True" in result.stdout
+    assert f"File size: {size_bytes} bytes" in result.stdout
+    assert "Verification completed successfully!" in result.stdout
