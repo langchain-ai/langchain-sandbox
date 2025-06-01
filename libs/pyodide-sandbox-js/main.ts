@@ -274,14 +274,14 @@ interface FileSystemOptions {
 
 interface PyodideResult {
   success: boolean;
-  result?: any;
+  result?: unknown;
   stdout?: string[];
   stderr?: string[];
   error?: string;
   jsonResult?: string;
   sessionBytes?: Uint8Array;
   sessionMetadata?: SessionMetadata;
-  fileSystemOperations?: any[];
+  fileSystemOperations?: Record<string, unknown>[];
   fileSystemInfo?: {
     type: "memfs";
     mountPoint: string;
@@ -300,10 +300,6 @@ interface FileSystemOperation {
 
 /**
  * Resolves a relative path within the sandbox environment.
- * 
- * @param inputPath - The input path to resolve
- * @param mountPoint - The sandbox mount point (default: "/sandbox")
- * @returns The resolved absolute path within the sandbox
  */
 function resolvePathInSandbox(
   inputPath: string,
@@ -328,10 +324,10 @@ function resolvePathInSandbox(
 /**
  * Setup memory filesystem environment in Python.
  */
-function setupFileSystem(pyodide: any): void {
+function setupFileSystem(pyodide: unknown): void {
   const mountPoint = "/sandbox";
   
-  pyodide.runPython(`
+  (pyodide as { runPython: (code: string) => void }).runPython(`
 import os
 import sys
 
@@ -350,7 +346,7 @@ sys.modules['__main__'].MOUNT_POINT = MOUNT_POINT
 # Add helper function for path resolution
 def resolve_path(path):
     """Resolve a path relative to the sandbox"""
-    if path.startswith("/"):
+    if isinstance(path, str) and path.startswith("/"):
         return path
     return os.path.join(MOUNT_POINT, path)
 
@@ -358,98 +354,144 @@ sys.modules['__main__'].resolve_path = resolve_path
   `);
 }
 
-async function initPyodide(pyodide: any, options: FileSystemOptions = {}): Promise<void> {
-  const sys = pyodide.pyimport("sys");
-  const pathlib = pyodide.pyimport("pathlib");
+function initPyodide(pyodide: unknown): void {
+  const sys = (pyodide as { pyimport: (name: string) => unknown }).pyimport("sys");
+  const pathlib = (pyodide as { pyimport: (name: string) => unknown }).pyimport("pathlib");
 
   const dirPath = "/tmp/pyodide_worker_runner/";
-  sys.path.append(dirPath);
-  pathlib.Path(dirPath).mkdir();
-  pathlib.Path(dirPath + "prepare_env.py").write_text(prepareEnvCode);
-
-  // Initialize filesystem if enabled
-  if (options.enableFileSystem) {
-    // Ensure sandbox mount point exists
-    try {
-      pyodide.FS.mkdirTree("/sandbox");
-    } catch (e) {
-      // Directory might already exist, which is fine
-    }
-    
-    setupFileSystem(pyodide);
-  }
-}
-
-async function performFileSystemOperations(
-  pyodide: any,
-  operations: FileSystemOperation[],
-  options: FileSystemOptions = {}
-): Promise<any[]> {
-  const results: any[] = [];
+  (sys as { path: { append: (path: string) => void } }).path.append(dirPath);
+  (pathlib as { Path: (path: string) => { mkdir: () => void; write_text: (text: string) => void } }).Path(dirPath).mkdir();
+  (pathlib as { Path: (path: string) => { mkdir: () => void; write_text: (text: string) => void } }).Path(dirPath + "prepare_env.py").write_text(prepareEnvCode);
 
   // Ensure sandbox mount point exists
   try {
-    pyodide.FS.mkdirTree("/sandbox");
-  } catch (e) {
+    (pyodide as { FS: { mkdirTree: (path: string) => void } }).FS.mkdirTree("/sandbox");
+  } catch (_e) {
     // Directory might already exist, which is fine
   }
+  
+  setupFileSystem(pyodide);
+}
 
-  const prepare_env = pyodide.pyimport("prepare_env");
-
-  for (const op of operations) {
-    try {
-      // Resolve paths using sandbox resolution
-      const resolvedPath = resolvePathInSandbox(op.path, "/sandbox");
-      let resolvedDestination: string | undefined;
-      
-      if (op.operation === "copy" && op.destination) {
-        resolvedDestination = resolvePathInSandbox(op.destination, "/sandbox");
-      }
-
-      // Create resolved operation
-      const resolvedOp = { 
-        ...op, 
-        path: resolvedPath,
-        ...(resolvedDestination && { destination: resolvedDestination })
-      };
-
-      // Handle binary write operations
-      if (op.operation === "write" && typeof op.content === "string") {
-        if (op.encoding === "binary") {
-          const result = await prepare_env.perform_fs_operation(resolvedOp);
-          results.push(result.toJs());
-          continue;
-        }
-
-        // Use pyodide.FS for text writes (better performance)
-        try {
-          const parentDir = resolvedPath.substring(0, resolvedPath.lastIndexOf("/"));
-          if (parentDir) {
-            pyodide.FS.mkdirTree(parentDir);
-          }
-          pyodide.FS.writeFile(resolvedPath, op.content, { encoding: op.encoding || "utf8" });
-          results.push({ success: true, operation: op.operation, path: resolvedPath });
-          continue;
-        } catch {
-          // Fallback to Python method if pyodide.FS fails
-        }
-      }
-
-      // Use Python method for other operations
-      const result = await prepare_env.perform_fs_operation(resolvedOp);
-      results.push(result.toJs());
-
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      results.push({
-        success: false,
-        error: errorMessage,
-        operation: op.operation,
-        path: op.path,
-      });
-    }
+/**
+ * Process stdin using ReadableStream for large files
+ */
+async function processStreamedFiles(pyodide: unknown): Promise<Record<string, unknown>[]> {
+  const results: Record<string, unknown>[] = [];
+  
+  // Read binary protocol header
+  const headerBuffer = new Uint8Array(8);
+  const headerRead = await Deno.stdin.read(headerBuffer);
+  
+  if (!headerRead || headerRead < 8) {
+    // No stdin data or insufficient data
+    return results;
   }
 
+  // Check magic header
+  const magic = new TextDecoder().decode(headerBuffer.slice(0, 3));
+  const version = headerBuffer[3];
+  if (magic !== "PSB" || version !== 1) {
+      throw new Error(`Invalid PSB header: ${magic} v${version}`);
+  }
+
+  // Get metadata length
+  const metadataLength = new DataView(headerBuffer.buffer).getUint32(4, false);
+  
+  // Read metadata
+  const metadataBuffer = new Uint8Array(metadataLength);
+  const metadataRead = await Deno.stdin.read(metadataBuffer);
+  
+  if (!metadataRead || metadataRead < metadataLength) {
+    throw new Error("Failed to read metadata");
+  }
+
+  // Parse metadata
+  const metadata = JSON.parse(new TextDecoder().decode(metadataBuffer)) as {
+    directories?: string[];
+    files?: Array<{ path: string; size: number; binary: boolean }>;
+  };
+  
+  // Process directories first
+  if (metadata.directories) {
+    for (const dir of metadata.directories) {
+      const resolvedPath = resolvePathInSandbox(dir, "/sandbox");
+      try {
+        (pyodide as { FS: { mkdirTree: (path: string) => void } }).FS.mkdirTree(resolvedPath);
+        results.push({
+          success: true,
+          operation: "mkdir",
+          path: dir
+        });
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        results.push({
+          success: false,
+          error: errorMsg,
+          operation: "mkdir",
+          path: dir
+        });
+      }
+    }
+  }
+  
+  // Process files
+  if (metadata.files && metadata.files.length > 0) {
+    for (const fileInfo of metadata.files) {
+      const resolvedPath = resolvePathInSandbox(fileInfo.path, "/sandbox");
+      
+      // Create parent directories if needed
+      const parentDir = resolvedPath.substring(0, resolvedPath.lastIndexOf("/"));
+      if (parentDir) {
+        try {
+          (pyodide as { FS: { mkdirTree: (path: string) => void } }).FS.mkdirTree(parentDir);
+        } catch (_e) {
+          // Directory might already exist
+        }
+      }
+
+      try {
+        // Read file data
+        const fileBuffer = new Uint8Array(fileInfo.size);
+        let bytesRead = 0;
+        
+        // Read in chunks to handle large files efficiently
+        while (bytesRead < fileInfo.size) {
+          const chunkSize = Math.min(65536, fileInfo.size - bytesRead);
+          const chunkBuffer = new Uint8Array(chunkSize);
+          const readResult = await Deno.stdin.read(chunkBuffer);
+          
+          if (readResult === null) {
+            throw new Error(`Unexpected end of stream at ${bytesRead}/${fileInfo.size} bytes`);
+          }
+          
+          // Copy to the main buffer
+          fileBuffer.set(chunkBuffer.subarray(0, readResult), bytesRead);
+          bytesRead += readResult;
+        }
+        
+        // Write to PyFS
+        (pyodide as { FS: { writeFile: (path: string, data: Uint8Array) => void } }).FS.writeFile(resolvedPath, fileBuffer);
+        
+        results.push({
+          success: true,
+          operation: "write",
+          path: fileInfo.path,
+          size: bytesRead,
+          binary: fileInfo.binary
+        });
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        results.push({
+          success: false,
+          error: errorMsg,
+          operation: "write",
+          path: fileInfo.path
+        });
+      }
+    }
+  }
+  
   return results;
 }
 
@@ -459,14 +501,12 @@ async function runPython(
     stateful?: boolean;
     sessionBytes?: string;
     sessionMetadata?: string;
-    fileSystemOptions?: FileSystemOptions;
-    fileSystemOperations?: FileSystemOperation[];
   } = {}
 ): Promise<PyodideResult> {
   const output: string[] = [];
   const err_output: string[] = [];
   const originalLog = console.log;
-  console.log = (...args: any[]) => {}
+  console.log = (..._args: unknown[]) => {}
 
   try {
     const pyodide = await loadPyodide({
@@ -481,23 +521,7 @@ async function runPython(
       },
     });
 
-    // Auto-enable filesystem if operations are provided or explicitly enabled
-    const shouldEnableFileSystem = 
-      options.fileSystemOperations?.length > 0 || 
-      options.fileSystemOptions?.enableFileSystem ||
-      // Detect file operations in Python code
-      (pythonCode.includes("open(") || 
-      pythonCode.includes("with open") ||
-      pythonCode.includes("os.") ||
-      pythonCode.includes("pathlib") ||
-      pythonCode.includes("Path("));
-
-    const fsOptions: FileSystemOptions = {
-      enableFileSystem: shouldEnableFileSystem,
-      ...options.fileSystemOptions
-    };
-
-    await initPyodide(pyodide, fsOptions);
+    initPyodide(pyodide);
 
     // Determine session metadata
     let sessionMetadata: SessionMetadata;
@@ -518,12 +542,12 @@ async function runPython(
     }
 
     // Import prepared environment module
-    const prepare_env = pyodide.pyimport("prepare_env");
+    const prepare_env = (pyodide as { pyimport: (name: string) => unknown }).pyimport("prepare_env");
 
-    // Execute filesystem operations before Python code
-    let fileSystemResults: any[] = [];
-    if (options.fileSystemOperations && options.fileSystemOperations.length > 0) {
-      fileSystemResults = await performFileSystemOperations(pyodide, options.fileSystemOperations, fsOptions);
+    let fileSystemResults: Record<string, unknown>[] = [];
+    
+    if (!Deno.stdin.isTerminal()) {
+      fileSystemResults = await processStreamedFiles(pyodide);
     }
 
     // Prepare packages to install (include dill)
@@ -532,9 +556,15 @@ async function runPython(
       ? [...new Set([...defaultPackages, ...sessionMetadata.packages])]
       : defaultPackages;
 
-    let installErrors: string[] = []
+    const installErrors: string[] = []
 
-    const installedPackages = await prepare_env.install_imports(
+    const installedPackages = await (prepare_env as {
+      install_imports: (
+        code: string,
+        packages: string[],
+        callback: (event: string, data: string) => void
+      ) => Promise<unknown[]>;
+    }).install_imports(
       pythonCode,
       additionalPackagesToInstall,
       (event_type: string, data: string) => {
@@ -560,18 +590,22 @@ async function runPython(
     if (options.sessionBytes) {
       sessionData = Uint8Array.from(JSON.parse(options.sessionBytes));
       // Run session preamble
-      await prepare_env.load_session_bytes(sessionData);
+      await (prepare_env as { load_session_bytes: (data: Uint8Array) => Promise<void> })
+        .load_session_bytes(sessionData);
     }
 
-    const packages = installedPackages.map((pkg: any) => pkg.get("package"));
+    const packages = installedPackages.map((pkg: unknown) => 
+      (pkg as { get?: (key: string) => string }).get?.("package") as string
+    );
 
     // Restore the original console.log function
     console.log = originalLog;
     
     // Run the Python code
-    const rawValue = await pyodide.runPythonAsync(pythonCode);
+    const rawValue = await (pyodide as { runPythonAsync: (code: string) => Promise<unknown> }).runPythonAsync(pythonCode);
     // Dump result to string
-    const jsonValue = await prepare_env.dumps(rawValue);
+    const jsonValue = await (prepare_env as { dumps: (value: unknown) => Promise<string> })
+      .dumps(rawValue);
 
     // Update session metadata with installed packages
     sessionMetadata.packages = [
@@ -581,15 +615,19 @@ async function runPython(
 
     if (options.stateful) {
       // Save session state to sessionBytes
-      sessionData = await prepare_env.dump_session_bytes() as Uint8Array;
+      sessionData = await (prepare_env as { dump_session_bytes: () => Promise<Uint8Array> })
+        .dump_session_bytes();
     }
 
+    // Process stdout - join array to string for consistent handling
+    const stdoutString = output.join('\n');
+    
     // Return the result with stdout and stderr output
     const result: PyodideResult = {
       success: true, 
       result: rawValue,
       jsonResult: jsonValue,
-      stdout: output,
+      stdout: stdoutString ? [stdoutString] : [],
       stderr: err_output,
       sessionMetadata: sessionMetadata,
     };
@@ -598,22 +636,20 @@ async function runPython(
       result["sessionBytes"] = sessionData;
     }
 
-    // Add filesystem info if enabled
-    if (fsOptions.enableFileSystem) {
-      result["fileSystemOperations"] = fileSystemResults;
-      result["fileSystemInfo"] = { 
-        type: "memfs",
-        mountPoint: "/sandbox",
-        workingDirectory: "", 
-        mounted: true
-      };
-    }
+    // Add filesystem info
+    result["fileSystemOperations"] = fileSystemResults;
+    result["fileSystemInfo"] = { 
+      type: "memfs",
+      mountPoint: "/sandbox",
+      workingDirectory: "", 
+      mounted: true
+    };
 
     return result;
-  } catch (error: any) {
+  } catch (error: unknown) {
     return { 
       success: false, 
-      error: error.message,
+      error: error instanceof Error ? error.message : String(error),
       stdout: output,
       stderr: err_output
     };
@@ -622,7 +658,7 @@ async function runPython(
 
 async function main(): Promise<void> {
   const flags = parseArgs(Deno.args, {
-    string: ["code", "file", "session-bytes", "session-metadata", "fs-operations"],
+    string: ["code", "file", "session-bytes", "session-metadata"],
     alias: {
       c: "code",
       f: "file",
@@ -631,7 +667,6 @@ async function main(): Promise<void> {
       s: "stateful",
       b: "session-bytes",
       m: "session-metadata",
-      x: "fs-operations",
     },
     boolean: ["help", "version", "stateful"],
     default: { 
@@ -652,7 +687,6 @@ OPTIONS:
   -s, --stateful <bool>          Use a stateful session
   -b, --session-bytes <bytes>    Session bytes
   -m, --session-metadata         Session metadata
-  -x, --fs-operations <json>     JSON array of filesystem operations
   -h, --help                     Display help
   -V, --version                  Display version
 `);     
@@ -664,71 +698,43 @@ OPTIONS:
     return
   }
 
-  const options = {
-    code: flags.code,
-    file: flags.file,
-    stateful: flags.stateful,
-    sessionBytes: flags["session-bytes"],
-    sessionMetadata: flags["session-metadata"],
-    fsOperations: flags["fs-operations"],
-  };
+  // Get Python code from file or command line argument
+  let pythonCode = "";
 
-  if (!options.code && !options.file) {
+  if (flags.file) {
+    try {
+      // Resolve relative or absolute file path
+      const filePath = flags.file.startsWith("/")
+        ? flags.file
+        : join(Deno.cwd(), flags.file);
+      pythonCode = await Deno.readTextFile(filePath);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`Error reading file ${flags.file}:`, errorMessage);
+      Deno.exit(1);
+    }
+  } else {
+    // Process code from command line (replacing escaped newlines)
+    pythonCode = flags.code?.replace(/\\n/g, "\n") ?? "";
+  }
+
+  if (!pythonCode) {
     console.error(
       "Error: You must provide Python code using either -c/--code or -f/--file option.\nUse --help for usage information."
     );
     Deno.exit(1);
   }
-
-  // Get Python code from file or command line argument
-  let pythonCode = "";
-
-  if (options.file) {
-    try {
-      // Resolve relative or absolute file path
-      const filePath = options.file.startsWith("/")
-        ? options.file
-        : join(Deno.cwd(), options.file);
-      pythonCode = await Deno.readTextFile(filePath);
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`Error reading file ${options.file}:`, errorMessage);
-      Deno.exit(1);
-    }
-  } else {
-    // Process code from command line (replacing escaped newlines)
-    pythonCode = options.code?.replace(/\\n/g, "\n") ?? "";
-  }
-
-  let fileSystemOperations: FileSystemOperation[] = [];
-  if (options.fsOperations) {
-    try {
-      fileSystemOperations = JSON.parse(options.fsOperations);
-    } catch (error: unknown) {
-      console.error("Error parsing filesystem operations:", error instanceof Error ? error.message : String(error));
-      Deno.exit(1);
-    }
-  }
-
-  const runOptions: any = {
-    stateful: options.stateful,
-    sessionBytes: options.sessionBytes,
-    sessionMetadata: options.sessionMetadata,
-  };
-
-  // Enable filesystem if operations are provided
-  if (fileSystemOperations.length > 0) {
-    runOptions.fileSystemOptions = {
-      enableFileSystem: true,
-    };
-    runOptions.fileSystemOperations = fileSystemOperations;
-  }
-
-  const result = await runPython(pythonCode, runOptions);
+  
+  // Run the code
+  const result = await runPython(pythonCode, {
+    stateful: flags.stateful,
+    sessionBytes: flags["session-bytes"],
+    sessionMetadata: flags["session-metadata"],
+  });
 
   // Create output JSON with stdout, stderr, and result
-  const outputJson: any = {
-    stdout: result.stdout?.join('\n') || null,
+  const outputJson: Record<string, unknown> = {
+    stdout: result.stdout?.join('\n') || "",
     stderr: result.success ? (result.stderr?.join('\n') || null) : result.error || null,
     result: result.success ? JSON.parse(result.jsonResult || 'null') : null,
     success: result.success,
@@ -755,8 +761,6 @@ OPTIONS:
 
 // If this module is run directly
 if (import.meta.main) {
-  // Override the global environment variables that Deno's permission prompts look for
-  // to suppress color-related permission prompts
   main().catch((err) => {
     console.error("Unhandled error:", err);
     Deno.exit(1);

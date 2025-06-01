@@ -1,7 +1,6 @@
 """Python wrapper that calls pyodide & deno for code execution."""
 
 import asyncio
-import base64
 import dataclasses
 import json
 import logging
@@ -15,8 +14,8 @@ from langchain_core.callbacks import (
 )
 from langchain_core.messages import ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool, InjectedToolCallId, StructuredTool
-from pydantic import BaseModel, Field
+from langchain_core.tools import BaseTool, InjectedToolCallId
+from pydantic import BaseModel, Field, PrivateAttr
 
 logger = logging.getLogger(__name__)
 
@@ -39,54 +38,8 @@ class CodeExecutionResult:
     filesystem_operations: list[dict] | None = None
 
 
-@dataclasses.dataclass(kw_only=True)
-class FileSystemOperation:
-    """Container for filesystem operations.
-
-    This class encapsulates a single filesystem operation that can be performed
-    within the sandboxed environment. Operations are serialized to JSON and
-    passed to the Deno subprocess for execution.
-
-    Supported operations:
-    - write: Create or write a file
-    - read: Read file contents
-    - mkdir: Create a directory
-    - list: List directory contents
-    - exists: Check if file/directory exists
-    - remove: Delete file/directory
-    - copy: Copy file/directory
-    """
-
-    operation: Literal["read", "write", "list", "mkdir", "exists", "remove", "copy"]
-    path: str
-    content: str | None = None
-    encoding: str | None = None
-    destination: str | None = None
-
-    def to_dict(self) -> dict[str, str]:
-        """Convert to dict for JSON serialization.
-
-        Returns:
-            Dictionary representation suitable for JSON serialization.
-        """
-        result = {
-            "operation": self.operation,
-            "path": self.path,
-        }
-
-        if self.content is not None:
-            result["content"] = self.content
-        if self.encoding is not None:
-            result["encoding"] = self.encoding
-        if self.destination is not None:
-            result["destination"] = self.destination
-
-        return result
-
-
 # Published package name
 PKG_NAME = "jsr:@langchain/pyodide-sandbox@0.0.4"
-# PKG_NAME = "../pyodide-sandbox-js/main.ts"  # noqa: ERA001
 
 
 def build_permission_flag(
@@ -135,7 +88,6 @@ class BasePyodideSandbox:
     - Limit file system access to specific directories
     - Control environment variable access
     - Prevent subprocess execution and FFI
-    - Attach files to in-memory filesystem before execution
     """
 
     def __init__(
@@ -150,7 +102,7 @@ class BasePyodideSandbox:
         allow_ffi: list[str] | bool = False,
         node_modules_dir: str = "auto",
         skip_deno_check: bool = False,
-        enable_filesystem: bool = False,
+        files: dict[str, str | bytes] | None = None,
     ) -> None:
         """Initialize the sandbox with specific Deno permissions.
 
@@ -208,12 +160,14 @@ class BasePyodideSandbox:
             node_modules_dir: Directory for Node.js modules. Set to "auto" to use
                 the default directory for Deno modules.
             skip_deno_check: If True, skip the check for Deno installation.
-            enable_filesystem: If True, enable in-memory filesystem support for
-                attaching files and directories to the sandbox environment.
+            files: Dictionary of files to attach to the sandbox filesystem.
+                Keys are file paths, values are file contents (str or bytes).
         """
         self.stateful = stateful
-        self.enable_filesystem = enable_filesystem
-        self._filesystem_operations: list[FileSystemOperation] = []
+        # List to store file information for binary streaming
+        self._sandbox_files = []
+        # List to store directory paths
+        self._sandbox_dirs = []
 
         if not skip_deno_check:
             # Check if Deno is installed
@@ -250,122 +204,141 @@ class BasePyodideSandbox:
 
         self.permissions.append(f"--node-modules-dir={node_modules_dir}")
 
+        # Attach files if provided during initialization
+        if files:
+            for path, content in files.items():
+                self.attach_file(path, content)
+
     def attach_file(
         self,
         path: str,
-        content: str,
-        *,
-        encoding: str = "utf-8",
+        content: str | bytes,
     ) -> None:
-        """Attach a text file to the sandbox filesystem.
+        """Attach a file to the sandbox filesystem using binary streaming.
 
-        This method queues a file to be created in the sandbox's in-memory
-        filesystem when code is executed. The file will be available for
-        reading and manipulation within the Python environment.
+        Files are stored in memory and streamed to the sandbox process via stdin
+        using a binary protocol. Both text and binary files are supported.
 
         Args:
-            path: File path within the sandbox filesystem
-            content: Text content of the file
-            encoding: Text encoding (default: utf-8)
+            path: Path where the file should be available in the sandbox
+            content: File content as string (for text files) or bytes (for binary files)
 
         Raises:
-            TypeError: If content is not a string
+            TypeError: If content is neither string nor bytes
         """
-        self.enable_filesystem = True
-
-        if not isinstance(content, str):
-            msg = "Content must be a string for text files"
+        if isinstance(content, str):
+            # Text file - convert to bytes
+            content_bytes = content.encode("utf-8")
+            self._sandbox_files.append(
+                {
+                    "path": path,
+                    "content": content_bytes,
+                    "size": len(content_bytes),
+                    "binary": False,
+                }
+            )
+            logger.debug(
+                "Attached text file: %s (%d bytes)",
+                path,
+                len(content_bytes),
+            )
+        elif isinstance(content, bytes):
+            # Binary file
+            self._sandbox_files.append(
+                {"path": path, "content": content, "size": len(content), "binary": True}
+            )
+            logger.debug(
+                "Attached binary file: %s (%d bytes)",
+                path,
+                len(content),
+            )
+        else:
+            msg = f"Content must be either a string or bytes, got {type(content)}"
             raise TypeError(msg)
-
-        operation = FileSystemOperation(
-            operation="write",
-            path=path,
-            content=content,
-            encoding=encoding,
-        )
-        self._filesystem_operations.append(operation)
-        logger.debug(
-            "Attached file: %s (%d chars, encoding: %s)",
-            path,
-            len(content),
-            encoding,
-        )
-
-    def attach_binary_file(
-        self,
-        path: str,
-        content: bytes,
-    ) -> None:
-        """Attach a binary file to the sandbox filesystem.
-
-        This method queues a binary file to be created in the sandbox's in-memory
-        filesystem when code is executed. The content is base64-encoded for
-        transport to the sandbox environment.
-
-        Args:
-            path: File path within the sandbox filesystem
-            content: Binary content of the file
-
-        Raises:
-            TypeError: If content is not bytes
-        """
-        self.enable_filesystem = True
-
-        if not isinstance(content, bytes):
-            msg = "Content must be bytes for binary files"
-            raise TypeError(msg)
-
-        b64_content = base64.b64encode(content).decode("ascii")
-        operation = FileSystemOperation(
-            operation="write",
-            path=path,
-            content=b64_content,
-            encoding="binary",
-        )
-        self._filesystem_operations.append(operation)
-        logger.debug(
-            "Attached binary file: %s (%d bytes -> %d b64 chars)",
-            path,
-            len(content),
-            len(b64_content),
-        )
 
     def create_directory(self, path: str) -> None:
         """Create a directory in the sandbox filesystem.
 
-        This method queues a directory to be created in the sandbox's in-memory
-        filesystem when code is executed.
-
         Args:
-            path: Directory path within the sandbox filesystem
+            path: Directory path to create in the sandbox
         """
-        self.enable_filesystem = True
-
-        operation = FileSystemOperation(
-            operation="mkdir",
-            path=path,
-        )
-        self._filesystem_operations.append(operation)
+        self._sandbox_dirs.append(path)
         logger.debug("Created directory: %s", path)
+
+    def clear_filesystem(self) -> dict[str, int]:
+        """Remove all files and directories from the sandbox filesystem.
+
+        Returns:
+            Dictionary with counts of removed files and directories
+        """
+        files_count = len(self._sandbox_files)
+        dirs_count = len(self._sandbox_dirs)
+
+        self._sandbox_files.clear()
+        self._sandbox_dirs.clear()
+
+        logger.debug("Cleared %d files and %d directories", files_count, dirs_count)
+        return {"files": files_count, "directories": dirs_count}
 
     def get_attached_files(self) -> list[str]:
         """Get list of attached file paths.
 
         Returns:
-            List of file paths that will be available in the sandbox filesystem
+            List of file paths currently attached to the sandbox
         """
-        return [
-            op.path for op in self._filesystem_operations if op.operation == "write"
-        ]
+        return [f["path"] for f in self._sandbox_files]
 
-    def clear_filesystem_operations(self) -> None:
-        """Clear all queued filesystem operations.
+    def has_file(self, path: str) -> bool:
+        """Check if a file is attached to the sandbox.
 
-        This removes all files and directories that were queued to be created
-        in the sandbox filesystem.
+        Args:
+            path: Path to check
+
+        Returns:
+            True if file exists, False otherwise
         """
-        self._filesystem_operations.clear()
-        logger.debug("Cleared filesystem operations")
+        return any(f["path"] == path for f in self._sandbox_files)
+
+    def _prepare_stdin_data(self) -> bytes | None:
+        """Prepare data to be sent via stdin using binary streaming protocol.
+
+        Creates a binary stream containing filesystem data when files or directories
+        are attached. Uses the PSB (Pyodide Sandbox Binary) protocol format:
+        - Header: "PSB" + version(1 byte) + metadata_length(4 bytes)
+        - Metadata: JSON describing files and directories
+        - Content: Raw binary content of all files in sequence
+
+        Returns:
+            Binary data to send via stdin, or None if no filesystem operations
+        """
+        # Use binary protocol if we have files or directories
+        if not self._sandbox_files and not self._sandbox_dirs:
+            # No files, return None to avoid sending stdin
+            return None
+
+        # Format: "PSB" + version + length(4 bytes) + metadata JSON + file data
+        metadata = {
+            "files": [
+                {"path": f["path"], "size": f["size"], "binary": f["binary"]}
+                for f in self._sandbox_files
+            ],
+            "directories": self._sandbox_dirs,
+        }
+
+        metadata_json = json.dumps(metadata).encode("utf-8")
+
+        # Create header: "PSB" + version + metadata size (4 bytes)
+        header = b"PSB\x01" + len(metadata_json).to_bytes(4, byteorder="big")
+
+        # Concatenate header + metadata
+        result = bytearray(header)
+        result.extend(metadata_json)
+
+        # Add file contents directly as binary data
+        for file_info in self._sandbox_files:
+            result.extend(file_info["content"])
+
+        return bytes(result)
 
     def _build_command(
         self,
@@ -415,18 +388,53 @@ class BasePyodideSandbox:
         if session_metadata:
             cmd.extend(["-m", json.dumps(session_metadata)])
 
-        # Add filesystem operations if any are queued
-        if self._filesystem_operations or self.enable_filesystem:
-            if self._filesystem_operations:
-                fs_ops = [op.to_dict() for op in self._filesystem_operations]
-                fs_json = json.dumps(fs_ops, ensure_ascii=True, separators=(",", ":"))
-                cmd.extend(["-x", fs_json])
-                logger.debug("Filesystem enabled with %d operations", len(fs_ops))
-            else:
-                cmd.extend(["-x", "[]"])
-                logger.debug("Filesystem enabled with no initial operations")
-
         return cmd
+
+
+def _process_execution_output(
+    stdout_text: str,
+    stderr_bytes: bytes,
+) -> tuple[
+    str, str, Any, str, dict | None, dict | None, list[dict] | None, bytes | None
+]:
+    """Process execution output and return parsed results.
+
+    Returns:
+        Tuple of (stdout, stderr, result, status, session_metadata,
+                 filesystem_info, filesystem_operations, session_bytes)
+    """
+    if stdout_text:
+        try:
+            full_result = json.loads(stdout_text)
+            stdout = full_result.get("stdout", "")
+            stderr = full_result.get("stderr", "")
+            result = full_result.get("result", None)
+            status = "success" if full_result.get("success", False) else "error"
+            session_metadata = full_result.get("sessionMetadata", None)
+            filesystem_info = full_result.get("fileSystemInfo", None)
+            filesystem_operations = full_result.get("fileSystemOperations", None)
+
+            # Convert array of bytes to Python bytes
+            session_bytes_array = full_result.get("sessionBytes", None)
+            session_bytes = bytes(session_bytes_array) if session_bytes_array else None
+
+            return (
+                stdout,
+                stderr,
+                result,
+                status,
+                session_metadata,
+                filesystem_info,
+                filesystem_operations,
+                session_bytes,
+            )
+        except json.JSONDecodeError as e:
+            status = "error"
+            stderr = f"Failed to parse output as JSON: {e}\nRaw output: {stdout_text}"
+            return ("", stderr, None, status, None, None, None, None)
+
+    stderr = stderr_bytes.decode("utf-8", errors="replace")
+    return ("", stderr, None, "error", None, None, None, None)
 
 
 class PyodideSandbox(BasePyodideSandbox):
@@ -434,7 +442,7 @@ class PyodideSandbox(BasePyodideSandbox):
 
     This class provides an asynchronous interface for executing Python code in a
     sandboxed Deno environment using Pyodide. It supports file attachment and
-    in-memory filesystem operations.
+    in-memory filesystem operations via binary streaming.
     """
 
     async def execute(
@@ -453,9 +461,6 @@ class PyodideSandbox(BasePyodideSandbox):
         environment. The execution is subject to the permissions configured in the
         sandbox's initialization and the resource constraints provided as arguments.
 
-        Any attached files will be made available in the sandbox's in-memory
-        filesystem before code execution begins.
-
         Args:
             code: The Python code to execute in the sandbox
             session_bytes: Optional bytes containing session state
@@ -467,11 +472,8 @@ class PyodideSandbox(BasePyodideSandbox):
             CodeExecutionResult containing execution results and metadata
         """
         start_time = time.time()
-        stdout = ""
-        stderr = ""
-        result = None
-        status: Literal["success", "error"] = "success"
 
+        # Build the command with all necessary arguments
         cmd = self._build_command(
             code,
             session_bytes=session_bytes,
@@ -479,64 +481,70 @@ class PyodideSandbox(BasePyodideSandbox):
             memory_limit_mb=memory_limit_mb,
         )
 
-        # Create and run the subprocess
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        # Prepare stdin data with filesystem operations (always binary streaming)
+        stdin_data = self._prepare_stdin_data()
 
         try:
-            # Wait for process with a timeout
+            # Configure process
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE if stdin_data else None,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            # Send stdin data if we have filesystem operations
+            communicate_args = {}
+            if stdin_data:
+                communicate_args["input"] = stdin_data
+
+            # Wait for the process with timeout
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(),
+                process.communicate(**communicate_args),
                 timeout=timeout_seconds,
             )
-            stdout = stdout_bytes.decode("utf-8", errors="replace")
 
-            if stdout:
-                # stdout encodes the full result from the sandbox.
-                # including stdout, stderr, and the json result.
-                full_result = json.loads(stdout)
-                stdout = full_result.get("stdout", None)
-                stderr = full_result.get("stderr", None)
-                result = full_result.get("result", None)
-                status = "success" if full_result.get("success", False) else "error"
-                session_metadata = full_result.get("sessionMetadata", None)
-                filesystem_info = full_result.get("fileSystemInfo", None)
-                filesystem_operations = full_result.get("fileSystemOperations", None)
-                # Convert the Uint8Array to Python bytes
-                session_bytes_array = full_result.get("sessionBytes", None)
-                session_bytes = (
-                    bytes(session_bytes_array) if session_bytes_array else None
-                )
-            else:
-                stderr = stderr_bytes.decode("utf-8", errors="replace")
-                status = "error"
-                filesystem_info = None
-                filesystem_operations = None
+            # Process the output
+            stdout_text = stdout_bytes.decode("utf-8", errors="replace")
+            (
+                stdout,
+                stderr,
+                result,
+                status,
+                session_metadata,
+                filesystem_info,
+                filesystem_operations,
+                session_bytes,
+            ) = _process_execution_output(stdout_text, stderr_bytes)
+
         except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
+            if process:
+                process.kill()
+                await process.wait()
             status = "error"
             stderr = f"Execution timed out after {timeout_seconds} seconds"
+            stdout = ""
+            result = None
+            session_metadata = None
             filesystem_info = None
             filesystem_operations = None
-        except json.JSONDecodeError as e:
+            session_bytes = None
+        except (OSError, subprocess.SubprocessError) as e:
             status = "error"
-            stderr = f"Failed to parse output as JSON: {e}\nRaw output: {stdout}"
+            stderr = f"Error during execution: {e!s}"
+            stdout = ""
+            result = None
+            session_metadata = None
             filesystem_info = None
             filesystem_operations = None
-        except asyncio.CancelledError:
-            # Optionally: log cancellation if needed
-            pass
+            session_bytes = None
 
         end_time = time.time()
 
         return CodeExecutionResult(
             status=status,
             execution_time=end_time - start_time,
-            stdout=stdout or None,
+            stdout=stdout,
             stderr=stderr or None,
             result=result,
             session_metadata=session_metadata,
@@ -549,8 +557,8 @@ class PyodideSandbox(BasePyodideSandbox):
 class SyncPyodideSandbox(BasePyodideSandbox):
     """Synchronous version of PyodideSandbox.
 
-    This class provides a synchronous interface to the PyodideSandbox functionality,
-    including file attachment and in-memory filesystem operations.
+    This class provides a synchronous interface to the PyodideSandbox functionality.
+    It supports the same features as the asynchronous version but in a blocking manner.
     """
 
     def execute(
@@ -565,8 +573,7 @@ class SyncPyodideSandbox(BasePyodideSandbox):
         """Execute Python code synchronously in a sandboxed Deno subprocess.
 
         This method provides the same functionality as PyodideSandbox.execute() but
-        in a synchronous/blocking manner. Any attached files will be made available
-        in the sandbox's in-memory filesystem before code execution begins.
+        in a synchronous/blocking manner.
 
         Args:
             code: The Python code to execute in the sandbox
@@ -579,11 +586,8 @@ class SyncPyodideSandbox(BasePyodideSandbox):
             CodeExecutionResult containing execution results and metadata
         """
         start_time = time.time()
-        stdout = ""
-        result = None
-        stderr: str
-        status: Literal["success", "error"]
 
+        # Build command
         cmd = self._build_command(
             code,
             session_bytes=session_bytes,
@@ -591,63 +595,59 @@ class SyncPyodideSandbox(BasePyodideSandbox):
             memory_limit_mb=memory_limit_mb,
         )
 
+        # Prepare stdin data with filesystem operations (always binary streaming)
+        stdin_data = self._prepare_stdin_data()
+
         try:
-            # Run the subprocess with timeout
+            # Execute the subprocess with stdin data
             # Ignoring S603 for subprocess.run as the cmd is built safely.
             # Untrusted input comes from `code` parameter, which should be
             # escaped properly as we are **not** using shell=True.
             process = subprocess.run(  # noqa: S603
                 cmd,
+                input=stdin_data,
                 capture_output=True,
                 text=False,  # Keep as bytes for proper decoding
                 timeout=timeout_seconds,
                 check=False,  # Don't raise on non-zero exit
             )
 
-            stdout_bytes = process.stdout
-            stderr_bytes = process.stderr
-
-            stdout = stdout_bytes.decode("utf-8", errors="replace")
-
-            if stdout:
-                # stdout encodes the full result from the sandbox
-                # including stdout, stderr, and the json result
-                full_result = json.loads(stdout)
-                stdout = full_result.get("stdout", None)
-                stderr = full_result.get("stderr", None)
-                result = full_result.get("result", None)
-                status = "success" if full_result.get("success", False) else "error"
-                session_metadata = full_result.get("sessionMetadata", None)
-                filesystem_info = full_result.get("fileSystemInfo", None)
-                filesystem_operations = full_result.get("fileSystemOperations", None)
-                # Convert the Uint8Array to Python bytes
-                session_bytes_array = full_result.get("sessionBytes", None)
-                session_bytes = (
-                    bytes(session_bytes_array) if session_bytes_array else None
-                )
-            else:
-                stderr = stderr_bytes.decode("utf-8", errors="replace")
-                status = "error"
-                filesystem_info = None
-                filesystem_operations = None
+            # Process the output
+            stdout_text = process.stdout.decode("utf-8", errors="replace")
+            (
+                stdout,
+                stderr,
+                result,
+                status,
+                session_metadata,
+                filesystem_info,
+                filesystem_operations,
+                session_bytes,
+            ) = _process_execution_output(stdout_text, process.stderr)
 
         except subprocess.TimeoutExpired:
             status = "error"
             stderr = f"Execution timed out after {timeout_seconds} seconds"
+            stdout = ""
+            result = None
             filesystem_info = None
             filesystem_operations = None
-        except json.JSONDecodeError as e:
+            session_bytes = None
+        except (OSError, subprocess.SubprocessError) as e:
             status = "error"
-            stderr = f"Failed to parse output as JSON: {e}\nRaw output: {stdout}"
+            stderr = f"Error during execution: {e!s}"
+            stdout = ""
+            result = None
             filesystem_info = None
             filesystem_operations = None
+            session_bytes = None
 
         end_time = time.time()
 
         return CodeExecutionResult(
             status=status,
             execution_time=end_time - start_time,
-            stdout=stdout or None,
+            stdout=stdout,
             stderr=stderr or None,
             result=result,
             session_metadata=session_metadata,
@@ -669,23 +669,25 @@ class PyodideSandboxTool(BaseTool):
         inside a LangGraph graph with a checkpointer, and
         has to be used with the prebuilt `create_react_agent` or `ToolNode`.
 
-    Example: stateless sandbox usage
+    Example: stateless sandbox usage with file attachment
 
         ```python
         from langgraph.prebuilt import create_react_agent
         from langchain_sandbox import PyodideSandboxTool
 
-        tool = PyodideSandboxTool(enable_filesystem=True, allow_net=True)
-
-        # Attach data files
-        tool.attach_file("data.csv", "name,age\\nJohn,25\\nMary,30")
+        # Attach CSV data to the sandbox
+        csv_data = "name,age\nJohn,30\nJane,25"
+        tool = PyodideSandboxTool(
+            allow_net=True,
+            files={"data.csv": csv_data}
+        )
 
         agent = create_react_agent(
             "anthropic:claude-3-7-sonnet-latest",
             tools=[tool],
         )
         result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": "analyze the data.csv file"}]},
+            {"messages": [{"role": "user", "content": "analyze the data in data.csv"}]},
         )
         ```
 
@@ -695,13 +697,13 @@ class PyodideSandboxTool(BaseTool):
         from langgraph.prebuilt import create_react_agent
         from langgraph.prebuilt.chat_agent_executor import AgentState
         from langgraph.checkpoint.memory import InMemorySaver
-        from langchain_sandbox import PyodideSandboxTool, PyodideSandbox
+        from langchain_sandbox import PyodideSandboxTool
 
         class State(AgentState):
             session_bytes: bytes
             session_metadata: dict
 
-        tool = PyodideSandboxTool(stateful=True, enable_filesystem=True, allow_net=True)
+        tool = PyodideSandboxTool(stateful=True, allow_net=True)
         agent = create_react_agent(
             "anthropic:claude-3-7-sonnet-latest",
             tools=[tool],
@@ -726,34 +728,75 @@ class PyodideSandboxTool(BaseTool):
     """
 
     name: str = "python_code_sandbox"
-    description: str = (
-        "A secure Python code sandbox with filesystem support. "
-        "Use this to execute python commands.\n"
-        "- Input should be a valid python command.\n"
-        "- To return output, you should print it out with `print(...)`.\n"
-        "- Don't use f-strings when printing outputs.\n"
-        "- If you need to make web requests, use `httpx.AsyncClient`.\n"
-        "- Files can be read/written using standard Python file operations.\n"
-        "- All file operations work within a sandboxed memory filesystem.\n"
-        "- Check for attached files using: import os; print(os.listdir('.'))"
+
+    # Field description with default value
+    description: str = Field(
+        default="A secure Python code sandbox with filesystem support."
     )
 
     # Mirror the PyodideSandbox constructor arguments
-    stateful: bool = False
-    allow_env: list[str] | bool = False
-    allow_read: list[str] | bool = False
-    allow_write: list[str] | bool = False
-    allow_net: list[str] | bool = False
-    allow_run: list[str] | bool = False
-    allow_ffi: list[str] | bool = False
-    timeout_seconds: float | None
-    """Timeout for code execution in seconds. By default set to 60 seconds."""
-    node_modules_dir: str = "auto"
-    enable_filesystem: bool = False
+    stateful: bool = Field(default=False)
+    allow_env: list[str] | bool = Field(default=False)
+    allow_read: list[str] | bool = Field(default=False)
+    allow_write: list[str] | bool = Field(default=False)
+    allow_net: list[str] | bool = Field(default=False)
+    allow_run: list[str] | bool = Field(default=False)
+    allow_ffi: list[str] | bool = Field(default=False)
+    timeout_seconds: float | None = Field(
+        default=60.0,
+        description="Timeout for code execution in seconds. "
+        "By default set to 60 seconds.",
+    )
+    node_modules_dir: str = Field(default="auto")
 
-    _sandbox: PyodideSandbox
-    _sync_sandbox: SyncPyodideSandbox
-    _structured_tool: StructuredTool | None
+    # Private attributes using PrivateAttr
+    _description_template: str = PrivateAttr(
+        default=(
+            "A secure Python code sandbox with filesystem support. "
+            "Use this to execute python commands.\n"
+            "- Input should be a valid python command.\n"
+            "- To return output, you should print it out with `print(...)`.\n"
+            "- Don't use f-strings when printing outputs.\n"
+            "- If you need to make web requests, use `httpx.AsyncClient`.\n"
+            "- Files can be read/written using standard Python file operations.\n"
+            "{available_files}"
+        )
+    )
+    _sandbox: PyodideSandbox | None = PrivateAttr(default=None)
+    _sync_sandbox: SyncPyodideSandbox | None = PrivateAttr(default=None)
+
+    def model_post_init(self, /, __context) -> None:
+        """Initialize sandboxes after Pydantic model initialization."""
+        super().model_post_init(__context)
+
+        # Define args_schema based on stateful configuration
+        if self.stateful:
+            try:
+                from langgraph.prebuilt import InjectedState
+
+                class PyodideSandboxToolInput(BaseModel):
+                    """Python code to execute in the sandbox."""
+
+                    code: str = Field(description="Code to execute.")
+                    # these fields will be ignored by the LLM
+                    # and automatically injected by LangGraph's ToolNode
+                    state: Annotated[dict[str, Any] | BaseModel, InjectedState]
+                    tool_call_id: Annotated[str, InjectedToolCallId]
+
+            except ImportError as e:
+                error_msg = (
+                    "The 'langgraph' package is required when using a stateful sandbox."
+                    " Please install it with 'pip install langgraph'."
+                )
+                raise ImportError(error_msg) from e
+        else:
+
+            class PyodideSandboxToolInput(BaseModel):
+                """Python code to execute in the sandbox."""
+
+                code: str = Field(description="Code to execute.")
+
+        self.args_schema = PyodideSandboxToolInput
 
     def __init__(
         self,
@@ -761,7 +804,8 @@ class PyodideSandboxTool(BaseTool):
         stateful: bool = False,
         timeout_seconds: float | None = 60,
         allow_net: list[str] | bool = False,
-        enable_filesystem: bool = False,
+        files: dict[str, str | bytes] | None = None,
+        description: str | None = None,
         **kwargs: dict[str, Any],
     ) -> None:
         """Initialize the tool.
@@ -772,59 +816,39 @@ class PyodideSandboxTool(BaseTool):
                 session state (variables, imports, etc.) in the execution result.
                 This allows saving and reusing the session state between executions.
             timeout_seconds: Timeout for code execution in seconds.
-            enable_filesystem: Enable in-memory filesystem support for attaching files.
             allow_net: configure network access. If setting to True, any network access
                 is allowed, including potentially internal network addresses that you
                 may not want to expose to a malicious actor.
                 Depending on your use case, you can restrict the network access to
                 only the URLs you need (e.g., required to set up micropip / pyodide).
                 Please refer to pyodide documentation for more details.
+            files: Dictionary of files to attach to the sandbox filesystem.
+                Keys are file paths, values are file contents (str or bytes).
+            description: Custom description template for the tool.
             **kwargs: Other attributes will be passed to the PyodideSandbox
         """
-        if stateful:
-            try:
-                from langgraph.prebuilt import InjectedState
-            except ImportError as e:
-                error_msg = (
-                    "The 'langgraph' package is required when using a stateful sandbox."
-                    " Please install it with 'pip install langgraph'."
-                )
-                raise ImportError(error_msg) from e
+        # Prepare arguments for super().__init__
+        init_kwargs = {
+            "stateful": stateful,
+            "timeout_seconds": timeout_seconds,
+            "allow_net": allow_net,
+            "allow_env": kwargs.get("allow_env", False),
+            "allow_read": kwargs.get("allow_read", False),
+            "allow_write": kwargs.get("allow_write", False),
+            "allow_run": kwargs.get("allow_run", False),
+            "allow_ffi": kwargs.get("allow_ffi", False),
+            "node_modules_dir": kwargs.get("node_modules_dir", "auto"),
+        }
 
-            class PyodideSandboxToolInput(BaseModel):
-                """Python code to execute in the sandbox."""
+        # Set custom description template if provided
+        if description is not None:
+            self._description_template = description
+            init_kwargs["description"] = description
 
-                code: str = Field(description="Code to execute.")
-                # these fields will be ignored by the LLM
-                # and automatically injected by LangGraph's ToolNode
-                state: Annotated[dict[str, Any] | BaseModel, InjectedState]
-                tool_call_id: Annotated[str, InjectedToolCallId]
+        # Call super().__init__() first
+        super().__init__(**init_kwargs)
 
-        else:
-
-            class PyodideSandboxToolInput(BaseModel):
-                """Python code to execute in the sandbox."""
-
-                code: str = Field(description="Code to execute.")
-
-        super().__init__(
-            stateful=stateful,
-            timeout_seconds=timeout_seconds,
-            allow_net=allow_net,
-            enable_filesystem=enable_filesystem,
-            **kwargs,
-        )
-
-        # Store initialization parameters
-        self.allow_env = kwargs.get("allow_env", False)
-        self.allow_read = kwargs.get("allow_read", False)
-        self.allow_write = kwargs.get("allow_write", False)
-        self.allow_run = kwargs.get("allow_run", False)
-        self.allow_ffi = kwargs.get("allow_ffi", False)
-        self.node_modules_dir = kwargs.get("node_modules_dir", "auto")
-
-        self.args_schema: type[BaseModel] = PyodideSandboxToolInput
-        self._structured_tool = None  # Initialize as None
+        # Create sandbox instances after initialization
         self._sandbox = PyodideSandbox(
             stateful=self.stateful,
             allow_env=self.allow_env,
@@ -834,8 +858,9 @@ class PyodideSandboxTool(BaseTool):
             allow_run=self.allow_run,
             allow_ffi=self.allow_ffi,
             node_modules_dir=self.node_modules_dir,
-            enable_filesystem=self.enable_filesystem,
+            files=files,
         )
+
         # Initialize sync sandbox with deno check skipped since async sandbox already
         # checked
         self._sync_sandbox = SyncPyodideSandbox(
@@ -847,211 +872,93 @@ class PyodideSandboxTool(BaseTool):
             allow_run=self.allow_run,
             allow_ffi=self.allow_ffi,
             node_modules_dir=self.node_modules_dir,
-            enable_filesystem=self.enable_filesystem,
             skip_deno_check=True,  # Skip deno check since async sandbox already checked
+            files=files,
         )
+
+        # Update description with attached files
+        self.description = self._build_description()
 
     def _build_description(self) -> str:
-        """Build the complete description string with attached files.
+        """Build the complete description string with attached files information.
 
         Returns:
-            Tool description including information about attached files
+            Complete description string including file information
         """
-        base = (
-            "A secure Python code sandbox with filesystem support. "
-            "Use this to execute python commands.\n"
-            "- Input should be a valid python command.\n"
-            "- To return output, you should print it out with `print(...)`.\n"
-            "- Don't use f-strings when printing outputs.\n"
-            "- If you need to make web requests, use `httpx.AsyncClient`.\n"
-            "- Files can be read/written using standard Python file operations."
-        )
-
         files = self._sandbox.get_attached_files()
         if files:
-            base += "\n\nATTACHED FILES AVAILABLE:\n"
-            base += "\n".join(f"  • {p}" for p in files)
-            base += (
-                "\nThese files are already loaded and ready to use with pandas, "
-                "open(), etc."
+            available_files = (
+                "\n\nATTACHED FILES AVAILABLE:\n"
+                + "\n".join(f"  • {p}" for p in files)
+                + "\nThese files are already loaded and ready to use "
+                "with pandas, open(), etc."
             )
-        return base
+        else:
+            available_files = ""
+
+        return self._description_template.format(available_files=available_files)
+
+    def _update_description(self) -> None:
+        """Update the description with current file information."""
+        self.description = self._build_description()
 
     def attach_file(
         self,
         path: str,
-        content: str,
-        *,
-        encoding: str = "utf-8",
+        content: str | bytes,
     ) -> None:
-        """Attach a text file to the sandbox environment.
-
-        This file will be available in the sandbox's in-memory filesystem
-        when code is executed. The tool's description will be automatically
-        updated to reflect the attached files.
+        """Attach a file to the sandbox environment.
 
         Args:
-            path: File path within the sandbox filesystem
-            content: Text content of the file
-            encoding: Text encoding (default: utf-8)
+            path: Path where the file should be available in the sandbox
+            content: File content as string (for text files) or bytes (for binary files)
         """
-        self._sandbox.attach_file(path, content, encoding=encoding)
-        self._sync_sandbox.attach_file(path, content, encoding=encoding)
-        # Update both BaseTool and StructuredTool descriptions
-        new_description = self._build_description()
-        self.description = new_description
-        if self._structured_tool:
-            self._structured_tool.description = new_description
-
-    def attach_binary_file(
-        self,
-        path: str,
-        content: bytes,
-    ) -> None:
-        """Attach a binary file to the sandbox environment.
-
-        This file will be available in the sandbox's in-memory filesystem
-        when code is executed. The tool's description will be automatically
-        updated to reflect the attached files.
-
-        Args:
-            path: File path within the sandbox filesystem
-            content: Binary content of the file
-        """
-        self._sandbox.attach_binary_file(path, content)
-        self._sync_sandbox.attach_binary_file(path, content)
-        # Update both BaseTool and StructuredTool descriptions
-        new_description = self._build_description()
-        self.description = new_description
-        if self._structured_tool:
-            self._structured_tool.description = new_description
+        self._sandbox.attach_file(path, content)
+        self._sync_sandbox.attach_file(path, content)
+        self._update_description()
 
     def create_directory(self, path: str) -> None:
         """Create a directory in the sandbox environment.
 
-        This directory will be available in the sandbox's in-memory filesystem
-        when code is executed.
-
         Args:
-            path: Directory path within the sandbox filesystem
+            path: Directory path to create in the sandbox
         """
         self._sandbox.create_directory(path)
         self._sync_sandbox.create_directory(path)
-        # Update both BaseTool and StructuredTool descriptions
-        new_description = self._build_description()
-        self.description = new_description
-        if self._structured_tool:
-            self._structured_tool.description = new_description
+        self._update_description()
+
+    def clear_filesystem(self) -> dict[str, int]:
+        """Remove all files and directories from the sandbox environment.
+
+        Returns:
+            Dictionary with counts of removed files and directories
+        """
+        result_async = self._sandbox.clear_filesystem()
+        result_sync = self._sync_sandbox.clear_filesystem()
+        self._update_description()
+        return {
+            "files": max(result_async["files"], result_sync["files"]),
+            "directories": max(result_async["directories"], result_sync["directories"]),
+        }
 
     def get_attached_files(self) -> list[str]:
         """Get list of attached file paths.
 
         Returns:
-            List of file paths that will be available in the sandbox filesystem
+            List of file paths currently attached to the sandbox
         """
         return self._sandbox.get_attached_files()
 
-    def clear_filesystem_operations(self) -> None:
-        """Clear all attached files and directories.
+    def has_file(self, path: str) -> bool:
+        """Check if a file is attached to the sandbox.
 
-        This removes all files and directories that were queued to be created
-        in the sandbox filesystem and updates the tool description.
-        """
-        self._sandbox.clear_filesystem_operations()
-        self._sync_sandbox.clear_filesystem_operations()
-        # Update both BaseTool and StructuredTool descriptions
-        new_description = self._build_description()
-        self.description = new_description
-        if self._structured_tool:
-            self._structured_tool.description = new_description
-
-    def as_structured_tool(self) -> StructuredTool:
-        """Return a StructuredTool version of this tool.
-
-        This method provides access to a StructuredTool interface while maintaining
-        the BaseTool as the primary interface. The StructuredTool's description
-        is kept in sync with attached files.
+        Args:
+            path: Path to check
 
         Returns:
-            StructuredTool instance with dynamic description updates
+            True if file exists, False otherwise
         """
-        if self._structured_tool is None:
-            self._structured_tool = StructuredTool.from_function(
-                name=self.name,
-                description=self._build_description(),
-                func=(self._run_sync if not self.stateful else self._run_stateful_sync),
-                args_schema=self.args_schema,
-            )
-        return self._structured_tool
-
-    def _run_sync(self, code: str) -> str:
-        """Synchronous execution function for non-stateful mode."""
-        result = self._sync_sandbox.execute(code, timeout_seconds=self.timeout_seconds)
-
-        if result.status == "error":
-            error_msg = (
-                result.stderr
-                if result.stderr
-                else "Execution failed with unknown error"
-            )
-            return f"Error during execution: {error_msg}"
-
-        if result.stdout:
-            return result.stdout
-
-        if result.result is not None:
-            return str(result.result)
-
-        return ""
-
-    def _run_stateful_sync(
-        self,
-        code: str,
-        state: dict[str, Any] | BaseModel,
-        tool_call_id: str,
-    ) -> Any:  # noqa: ANN401
-        """Synchronous execution function for stateful mode."""
-        required_keys = {"session_bytes", "session_metadata", "messages"}
-        actual_keys = set(state) if isinstance(state, dict) else set(state.__dict__)
-        if missing_keys := required_keys - actual_keys:
-            error_msg = (
-                f"Input state is missing the following required keys: {missing_keys}"
-            )
-            raise ValueError(error_msg)
-
-        if isinstance(state, dict):
-            session_bytes = state["session_bytes"]
-            session_metadata = state["session_metadata"]
-        else:
-            session_bytes = state.session_bytes
-            session_metadata = state.session_metadata
-
-        result = self._sync_sandbox.execute(
-            code,
-            session_bytes=session_bytes,
-            session_metadata=session_metadata,
-            timeout_seconds=self.timeout_seconds,
-        )
-
-        if result.stderr:
-            tool_result = f"Error during execution: {result.stderr}"
-        else:
-            tool_result = result.stdout
-
-        from langgraph.types import Command
-
-        return Command(
-            update={
-                "session_bytes": result.session_bytes,
-                "session_metadata": result.session_metadata,
-                "messages": [
-                    ToolMessage(
-                        content=tool_result,
-                        tool_call_id=tool_call_id,
-                    )
-                ],
-            }
-        )
+        return self._sandbox.has_file(path)
 
     def _run(
         self,
