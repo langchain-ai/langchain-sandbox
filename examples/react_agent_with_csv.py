@@ -4,13 +4,6 @@ import asyncio
 from langchain_sandbox import PyodideSandboxTool
 from langgraph.prebuilt import create_react_agent
 
-
-# Define the sandbox tool with filesystem support
-sandbox_tool = PyodideSandboxTool(
-    enable_filesystem=True,
-    allow_net=True,
-)
-
 sales_data = """date,product,category,quantity,price,region
 2024-01-15,Laptop,Electronics,2,1299.99,North
 2024-01-16,Chair,Furniture,1,249.50,South
@@ -23,7 +16,13 @@ sales_data = """date,product,category,quantity,price,region
 2024-01-22,Sofa,Furniture,1,899.99,North
 2024-01-23,Shoes,Clothing,3,129.99,South"""
 
-sandbox_tool.attach_file("sales.csv", sales_data)
+# Define the sandbox tool with filesystem support
+sandbox_tool = PyodideSandboxTool(
+    allow_net=True,
+    files={
+        "sales.csv": sales_data
+    }
+)
 
 # Create an agent with the sandbox tool
 agent = create_react_agent(
