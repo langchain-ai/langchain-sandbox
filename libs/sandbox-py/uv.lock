@@ -439,7 +439,7 @@ wheels = [
 
 [[package]]
 name = "langchain-sandbox"
-version = "0.0.6"
+version = "0.0.5"
 source = { editable = "." }
 dependencies = [
     { name = "langchain-core" },
