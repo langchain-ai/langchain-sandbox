@@ -358,3 +358,55 @@ print("Verification completed successfully!")
     assert "File exists: True" in result.stdout
     assert f"File size: {size_bytes} bytes" in result.stdout
     assert "Verification completed successfully!" in result.stdout
+
+
+def test_description_custom_without_files(pyodide_package: None) -> None:
+    """Test custom description without files."""
+    custom_description = "Use Python to analyze data. No fancy stuff."
+
+    tool = PyodideSandboxTool(allow_net=True, description=custom_description)
+
+    # Verify the custom description is used and doesn't have file info
+    assert tool.description == custom_description
+    assert "ATTACHED FILES AVAILABLE" not in tool.description
+
+
+def test_description_custom_with_files(pyodide_package: None) -> None:
+    """Test custom description with files."""
+    custom_description = "Custom Python sandbox with {available_files}"
+
+    tool = PyodideSandboxTool(allow_net=True, description=custom_description)
+
+    # Initial state should not have file info
+    assert tool.description == "Custom Python sandbox with "
+
+    # Add files and check if description is updated properly
+    tool.attach_file("data.csv", "a,b\n1,2")
+    tool.attach_file("config.json", '{"setting": true}')
+
+    # Verify description contains both custom text and file info
+    assert "Custom Python sandbox with" in tool.description
+    assert "ATTACHED FILES AVAILABLE" in tool.description
+    assert "data.csv" in tool.description
+    assert "config.json" in tool.description
+
+
+def test_description_default(pyodide_package: None) -> None:
+    """Test default description behavior."""
+    tool = PyodideSandboxTool(allow_net=True)
+
+    # Check default description
+    assert "A secure Python code sandbox with filesystem support" in tool.description
+    assert "ATTACHED FILES AVAILABLE" not in tool.description
+
+    # Add a file and check if description is updated
+    tool.attach_file("test.txt", "Hello world")
+
+    # Verify description was updated with file info
+    assert "A secure Python code sandbox with filesystem support" in tool.description
+    assert "ATTACHED FILES AVAILABLE" in tool.description
+    assert "test.txt" in tool.description
+
+    # Clear files and check if description is updated
+    tool.clear_filesystem()
+    assert "ATTACHED FILES AVAILABLE" not in tool.description

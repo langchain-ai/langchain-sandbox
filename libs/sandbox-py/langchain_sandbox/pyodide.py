@@ -820,6 +820,7 @@ class PyodideSandboxTool(BaseTool):
     )
     _sandbox: PyodideSandbox | None = PrivateAttr(default=None)
     _sync_sandbox: SyncPyodideSandbox | None = PrivateAttr(default=None)
+    _custom_description: bool = PrivateAttr(default=False)
 
     def model_post_init(self, /, __context) -> None:
         """Initialize sandboxes after Pydantic model initialization."""
@@ -896,13 +897,14 @@ class PyodideSandboxTool(BaseTool):
             "node_modules_dir": kwargs.get("node_modules_dir", "auto"),
         }
 
-        # Set custom description template if provided
-        if description is not None:
-            self._description_template = description
-            init_kwargs["description"] = description
-
         # Call super().__init__() first
         super().__init__(**init_kwargs)
+
+        # Set up custom description if provided
+        if description is not None:
+            self._custom_description = True
+            self._description_template = description
+            self.description = description
 
         # Create sandbox instances after initialization
         self._sandbox = PyodideSandbox(
@@ -932,8 +934,10 @@ class PyodideSandboxTool(BaseTool):
             files=files,
         )
 
-        # Update description with attached files
-        self.description = self._build_description()
+        if not self._custom_description or (
+            "{available_files}" in self._description_template
+        ):
+            self.description = self._build_description()
 
     def _build_description(self) -> str:
         """Build the complete description string with attached files information.
@@ -941,6 +945,12 @@ class PyodideSandboxTool(BaseTool):
         Returns:
             Complete description string including file information
         """
+        if (
+            self._custom_description
+            and "{available_files}" not in self._description_template
+        ):
+            return self._description_template
+
         files = self._sandbox.get_attached_files()
         if files:
             available_files = (
@@ -956,7 +966,12 @@ class PyodideSandboxTool(BaseTool):
 
     def _update_description(self) -> None:
         """Update the description with current file information."""
-        self.description = self._build_description()
+        # Only update description if using default template or custom template with placeholder
+        if (
+            not self._custom_description
+            or "{available_files}" in self._description_template
+        ):
+            self.description = self._build_description()
 
     def attach_file(
         self,
@@ -1024,7 +1039,21 @@ class PyodideSandboxTool(BaseTool):
         config: RunnableConfig | None = None,
         run_manager: CallbackManagerForToolRun | None = None,
     ) -> Any:  # noqa: ANN401
-        """Use the tool synchronously."""
+        """Use the tool synchronously.
+
+        Args:
+            code: The code to execute in the sandbox
+            state: State object containing session information (required for stateful mode)
+            tool_call_id: ID of the tool call for message creation
+            config: Configuration for the tool execution
+            run_manager: Callback manager for the tool run
+
+        Returns:
+            Tool execution result or LangGraph Command in stateful mode
+
+        Raises:
+            ValueError: If required state keys are missing in stateful mode
+        """
         if self.stateful:
             required_keys = {"session_bytes", "session_metadata", "messages"}
             actual_keys = set(state) if isinstance(state, dict) else set(state.__dict__)
@@ -1086,7 +1115,21 @@ class PyodideSandboxTool(BaseTool):
         config: RunnableConfig | None = None,
         run_manager: AsyncCallbackManagerForToolRun | None = None,
     ) -> Any:  # noqa: ANN401
-        """Use the tool asynchronously."""
+        """Use the tool asynchronously.
+
+        Args:
+            code: The code to execute in the sandbox
+            state: State object containing session information (required for stateful mode)
+            tool_call_id: ID of the tool call for message creation
+            config: Configuration for the tool execution
+            run_manager: Callback manager for the tool run
+
+        Returns:
+            Tool execution result or LangGraph Command in stateful mode
+
+        Raises:
+            ValueError: If required state keys are missing in stateful mode
+        """
         if self.stateful:
             required_keys = {"session_bytes", "session_metadata", "messages"}
             actual_keys = set(state) if isinstance(state, dict) else set(state.__dict__)
