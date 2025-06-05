@@ -55,6 +55,7 @@ def build_permission_flag(
         flag: The base permission flag (e.g., "--allow-read").
         value: Either a boolean (True for unrestricted access, False for no access)
                  or a list of allowed items.
+        default_values: Optional default items that should always be included.
 
     Returns:
         A string with the permission flag and items, or None if no permission should
@@ -174,7 +175,7 @@ class BasePyodideSandbox:
         if not skip_deno_check:
             # Check if Deno is installed
             try:
-                subprocess.run(["deno", "--version"], check=True, capture_output=True)
+                subprocess.run(["deno", "--version"], check=True, capture_output=True)  # noqa: S607, S603
             except subprocess.CalledProcessError as e:
                 msg = "Deno is installed, but running it failed."
                 raise RuntimeError(msg) from e
@@ -182,82 +183,28 @@ class BasePyodideSandbox:
                 msg = "Deno is not installed or not in PATH."
                 raise RuntimeError(msg) from e
 
-        # This ensures we can reliably access the node_modules regardless of working directory
-        pkg_path = os.path.abspath(os.path.dirname(PKG_NAME))
-
-        # These read paths are the minimum required for Pyodide to function properly
-        # Without these, Pyodide cannot load its core WASM files and other resources
-        read_paths = [
-            # Basic node_modules access for Pyodide's core files
-            "node_modules",
-            # Absolute path to node_modules for reliability
-            os.path.join(pkg_path, "node_modules"),
-            # Deno-specific package cache location
-            os.path.join(pkg_path, "node_modules/.deno"),
-            # Current directory for user files
-            ".",
-            # Temporary directory for Pyodide operations
-            "/tmp",
-        ]
-
-        # Write paths are needed for Pyodide to install packages and create temporary files
-        # Without these, micropip and other package installation won't work
-        write_paths = [
-            # Allow writing to node_modules for package installation
-            "node_modules",
-            # Absolute path to node_modules
-            os.path.join(pkg_path, "node_modules"),
-            # Deno's package cache
-            os.path.join(pkg_path, "node_modules/.deno"),
-            # Temporary directory for various operations
-            "/tmp",
-            # Deno's cache directories
-            os.path.expanduser("~/.cache/deno"),
-            os.path.expanduser("~/.deno"),
-            # Current directory for user file operations
-            ".",
-        ]
-
-        # Merge user-provided read permissions with required paths
-        # This ensures security (by honoring user restrictions) while maintaining functionality
-        if allow_read is True:
-            final_read_paths = True  # User requested unrestricted access
-        elif isinstance(allow_read, list):
-            # Combine user paths with required paths
-            final_read_paths = list(set(allow_read + read_paths))
-        else:
-            # Use only the required minimum paths
-            final_read_paths = read_paths
-
-        # Similar logic for write permissions
-        if allow_write is True:
-            final_write_paths = True  # User requested unrestricted access
-        elif isinstance(allow_write, list):
-            # Combine user paths with required paths
-            final_write_paths = list(set(allow_write + write_paths))
-        else:
-            # Use only the required minimum paths
-            final_write_paths = write_paths
-
-        # Define all permission flags that will be passed to Deno
-        # This uses Deno's security model to restrict what the sandbox can access
+        # Define permission configurations:
+        # each tuple contains (flag, setting, defaults)
         perm_defs = [
-            ("--allow-env", allow_env),  # Environment variable access
-            ("--allow-read", final_read_paths),  # Filesystem read access
-            ("--allow-write", final_write_paths),  # Filesystem write access
-            ("--allow-net", allow_net),  # Network access
-            ("--allow-run", allow_run),  # Subprocess execution
-            ("--allow-ffi", allow_ffi),  # Foreign function interface
+            ("--allow-env", allow_env, None),
+            # For file system permissions, if no permission is specified,
+            # force node_modules
+            ("--allow-read", allow_read, ["node_modules"]),
+            ("--allow-write", allow_write, ["node_modules"]),
+            ("--allow-net", allow_net, None),
+            ("--allow-run", allow_run, None),
+            ("--allow-ffi", allow_ffi, None),
         ]
 
-        # Build the actual permission flags
         self.permissions = []
-        for flag, value in perm_defs:
+        for flag, value, defaults in perm_defs:
             perm = build_permission_flag(flag, value=value)
+            if perm is None and defaults is not None:
+                default_value = ",".join(defaults)
+                perm = f"{flag}={default_value}"
             if perm:
                 self.permissions.append(perm)
 
-        # Configure node_modules directory handling
         self.permissions.append(f"--node-modules-dir={node_modules_dir}")
 
         # Attach files if provided during initialization

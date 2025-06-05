@@ -178,9 +178,11 @@ def test_sync_pyodide_sandbox_timeout(pyodide_package: None) -> None:
 
 def test_pyodide_sandbox_tool(pyodide_package: None) -> None:
     """Test synchronous invocation of PyodideSandboxTool."""
+    # allow_read=True is required for Deno to access Pyodide WASM files
     tool = PyodideSandboxTool(
         stateful=False,
         allow_net=True,
+        allow_read=True,
     )
     result = tool.invoke({"code": "x = 5; print(x)"})
     assert result == "5"
@@ -201,9 +203,11 @@ def test_pyodide_timeout() -> None:
 
 async def test_async_pyodide_sandbox_tool(pyodide_package: None) -> None:
     """Test asynchronous invocation of PyodideSandboxTool."""
+    # allow_read=True is required for Deno to access Pyodide WASM files
     tool = PyodideSandboxTool(
         stateful=False,
         allow_net=True,
+        allow_read=True,
     )
     result = await tool.ainvoke({"code": "x = 5; print(x)"})
     assert result == "5"
@@ -224,7 +228,8 @@ async def test_async_pyodide_timeout() -> None:
 
 async def test_filesystem_basic_operations(pyodide_package: None) -> None:
     """Test basic filesystem operations."""
-    sandbox = PyodideSandbox(allow_net=True)
+    # allow_read=True is required for Deno to access Pyodide WASM files
+    sandbox = PyodideSandbox(allow_net=True, allow_read=True)
 
     # Attach files
     sandbox.attach_file("test.txt", "Hello, World!")
@@ -270,7 +275,8 @@ print(f"Created file content: {created_content}")
 
 def test_filesystem_tool_usage(pyodide_package: None) -> None:
     """Test filesystem with PyodideSandboxTool."""
-    tool = PyodideSandboxTool(allow_net=True)
+    # allow_read=True is required for Deno to access Pyodide WASM files
+    tool = PyodideSandboxTool(allow_net=True, allow_read=True)
 
     # Attach CSV data
     csv_data = "name,age\nAlice,30\nBob,25"
@@ -296,7 +302,8 @@ for user in users:
 
 async def test_binary_file_operations(pyodide_package: None) -> None:
     """Test binary file operations."""
-    sandbox = PyodideSandbox(allow_net=True)
+    # allow_read=True is required for Deno to access Pyodide WASM files
+    sandbox = PyodideSandbox(allow_net=True, allow_read=True)
 
     # Create some binary data
     binary_data = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
@@ -327,7 +334,8 @@ print(f"Size: {size} bytes")
 
 async def test_large_file_attachment(pyodide_package: None) -> None:
     """Test attaching a large file to the sandbox."""
-    sandbox = PyodideSandbox(allow_net=True)
+    # allow_read=True is required for Deno to access Pyodide WASM files
+    sandbox = PyodideSandbox(allow_net=True, allow_read=True)
 
     # Generate a test file with a simple pattern
     size_mb = 5  # 5MB is sufficient to test streaming
