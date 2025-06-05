@@ -32,7 +32,14 @@ class InstallEntry(TypedDict):
     package: str
 
 def perform_fs_operation(op) -> dict:
-    """Filesystem operation function for file operations."""
+    """Filesystem operation function for file operations.
+    
+    Supports only essential operations needed for the binary streaming protocol:
+    - read: Read file contents (text or binary)
+    - write: Write file contents (text or binary) 
+    - list: List directory contents
+    - mkdir: Create directories
+    """
     try:
         if hasattr(op, 'to_py'):
             op = op.to_py()
@@ -41,7 +48,6 @@ def perform_fs_operation(op) -> dict:
         path = op.get("path")
         content = op.get("content")
         encoding = op.get("encoding", "utf-8")
-        destination = op.get("destination")
         
         if operation == "read":
             if os.path.exists(path):
@@ -69,8 +75,7 @@ def perform_fs_operation(op) -> dict:
                 with open(path, "w", encoding=encoding) as f:
                     f.write(content)
                     
-            exists = os.path.exists(path)
-            if exists:
+            if os.path.exists(path):
                 return {"success": True}
             else:
                 return {"success": False, "error": f"Failed to create file at {path}"}
@@ -95,38 +100,13 @@ def perform_fs_operation(op) -> dict:
         elif operation == "mkdir":
             try:
                 os.makedirs(path, exist_ok=True)
-                exists = os.path.exists(path)
-                return {"success": exists, "error": None if exists else "Failed to create directory"}
+                if os.path.exists(path):
+                    return {"success": True}
+                else:
+                    return {"success": False, "error": "Failed to create directory"}
             except Exception as e:
                 return {"success": False, "error": f"Error creating directory: {str(e)}"}
             
-        elif operation == "exists":
-            exists = os.path.exists(path)
-            return {"success": True, "exists": exists}
-            
-        elif operation == "remove":
-            if os.path.exists(path):
-                if os.path.isfile(path):
-                    os.remove(path)
-                elif os.path.isdir(path):
-                    import shutil
-                    shutil.rmtree(path)
-                return {"success": True}
-            else:
-                return {"success": False, "error": f"Path not found for removal: {path}"}
-                
-        elif operation == "copy":
-            if not destination:
-                return {"success": False, "error": "Destination path required for copy operation"}
-            if os.path.exists(path):
-                import shutil
-                if os.path.isfile(path):
-                    shutil.copy2(path, destination)
-                elif os.path.isdir(path):
-                    shutil.copytree(path, destination, dirs_exist_ok=True)
-                return {"success": True}
-            else:
-                return {"success": False, "error": f"Source path not found for copy: {path}"}
         else:
             return {"success": False, "error": f"Unknown operation: {operation}"}
             
@@ -291,7 +271,7 @@ interface PyodideResult {
 }
 
 interface FileSystemOperation {
-  operation: "read" | "write" | "list" | "mkdir" | "exists" | "remove" | "copy";
+  operation: "read" | "write" | "list" | "mkdir"; // Removed: "exists" | "remove" | "copy"
   path: string;
   content?: string | Uint8Array;
   encoding?: string;
