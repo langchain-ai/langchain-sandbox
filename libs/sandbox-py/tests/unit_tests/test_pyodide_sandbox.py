@@ -229,12 +229,12 @@ async def test_async_pyodide_timeout() -> None:
 async def test_filesystem_basic_operations(pyodide_package: None) -> None:
     """Test basic filesystem operations."""
     # allow_read=True is required for Deno to access Pyodide WASM files
-    sandbox = PyodideSandbox(allow_net=True, allow_read=True)
-
-    # Attach files
-    sandbox.attach_file("test.txt", "Hello, World!")
-    sandbox.attach_file("data.json", '{"key": "value"}')
-    sandbox.create_directory("output")
+    sandbox = PyodideSandbox(
+        allow_net=True,
+        allow_read=True,
+        files={"test.txt": "Hello, World!", "data.json": '{"key": "value"}'},
+        directories=["output"],
+    )
 
     code = """
 import os
@@ -247,7 +247,7 @@ with open("test.txt", "r") as f:
 with open("data.json", "r") as f:
     json_data = json.load(f)
 
-# Create new file
+# Create new file in pre-created directory
 with open("output/result.txt", "w") as f:
     f.write("Processing complete!")
 
@@ -275,12 +275,11 @@ print(f"Created file content: {created_content}")
 
 def test_filesystem_tool_usage(pyodide_package: None) -> None:
     """Test filesystem with PyodideSandboxTool."""
-    # allow_read=True is required for Deno to access Pyodide WASM files
-    tool = PyodideSandboxTool(allow_net=True, allow_read=True)
-
-    # Attach CSV data
+    # Attach CSV data using files parameter in constructor
     csv_data = "name,age\nAlice,30\nBob,25"
-    tool.attach_file("users.csv", csv_data)
+    tool = PyodideSandboxTool(
+        allow_net=True, allow_read=True, files={"users.csv": csv_data}
+    )
 
     code = """
 import csv
@@ -302,13 +301,13 @@ for user in users:
 
 async def test_binary_file_operations(pyodide_package: None) -> None:
     """Test binary file operations."""
-    # allow_read=True is required for Deno to access Pyodide WASM files
-    sandbox = PyodideSandbox(allow_net=True, allow_read=True)
-
     # Create some binary data
     binary_data = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
-    # Use attach_file which supports binary data
-    sandbox.attach_file("image.png", binary_data)
+
+    # allow_read=True is required for Deno to access Pyodide WASM files
+    sandbox = PyodideSandbox(
+        allow_net=True, allow_read=True, files={"image.png": binary_data}
+    )
 
     code = """
 import base64
@@ -334,9 +333,6 @@ print(f"Size: {size} bytes")
 
 async def test_large_file_attachment(pyodide_package: None) -> None:
     """Test attaching a large file to the sandbox."""
-    # allow_read=True is required for Deno to access Pyodide WASM files
-    sandbox = PyodideSandbox(allow_net=True, allow_read=True)
-
     # Generate a test file with a simple pattern
     size_mb = 5  # 5MB is sufficient to test streaming
     size_bytes = size_mb * 1024 * 1024
@@ -344,7 +340,10 @@ async def test_large_file_attachment(pyodide_package: None) -> None:
     # Generate test content
     large_data = bytes([i % 256 for i in range(size_bytes)])
 
-    sandbox.attach_file("large_file.bin", large_data)
+    # allow_read=True is required for Deno to access Pyodide WASM files
+    sandbox = PyodideSandbox(
+        allow_net=True, allow_read=True, files={"large_file.bin": large_data}
+    )
 
     # Verify that the file was attached correctly
     code = """
@@ -383,14 +382,12 @@ def test_description_custom_with_files(pyodide_package: None) -> None:
     """Test custom description with files."""
     custom_description = "Custom Python sandbox with {available_files}"
 
-    tool = PyodideSandboxTool(allow_net=True, description=custom_description)
-
-    # Initial state should not have file info
-    assert tool.description == "Custom Python sandbox with "
-
-    # Add files and check if description is updated properly
-    tool.attach_file("data.csv", "a,b\n1,2")
-    tool.attach_file("config.json", '{"setting": true}')
+    # Create tool with files in constructor
+    tool = PyodideSandboxTool(
+        allow_net=True,
+        description=custom_description,
+        files={"data.csv": "a,b\n1,2", "config.json": '{"setting": true}'},
+    )
 
     # Verify description contains both custom text and file info
     assert "Custom Python sandbox with" in tool.description
@@ -407,14 +404,88 @@ def test_description_default(pyodide_package: None) -> None:
     assert "A secure Python code sandbox with filesystem support" in tool.description
     assert "ATTACHED FILES AVAILABLE" not in tool.description
 
-    # Add a file and check if description is updated
-    tool.attach_file("test.txt", "Hello world")
+    # Create a new tool with files to test description update
+    tool_with_files = PyodideSandboxTool(
+        allow_net=True, files={"test.txt": "Hello world"}
+    )
 
     # Verify description was updated with file info
-    assert "A secure Python code sandbox with filesystem support" in tool.description
-    assert "ATTACHED FILES AVAILABLE" in tool.description
-    assert "test.txt" in tool.description
+    assert (
+        "A secure Python code sandbox with filesystem support"
+        in tool_with_files.description
+    )
+    assert "ATTACHED FILES AVAILABLE" in tool_with_files.description
+    assert "test.txt" in tool_with_files.description
 
-    # Clear files and check if description is updated
-    tool.clear_filesystem()
-    assert "ATTACHED FILES AVAILABLE" not in tool.description
+
+def test_directories_creation(pyodide_package: None) -> None:
+    """Test directory creation via constructor."""
+    tool = PyodideSandboxTool(
+        allow_net=True, allow_read=True, directories=["data", "output", "logs/app"]
+    )
+
+    code = """
+import os
+
+# Check if directories exist
+data_exists = os.path.exists("data") and os.path.isdir("data")
+output_exists = os.path.exists("output") and os.path.isdir("output")
+logs_exists = os.path.exists("logs") and os.path.isdir("logs")
+logs_app_exists = os.path.exists("logs/app") and os.path.isdir("logs/app")
+
+# List root directory
+root_items = sorted(os.listdir("."))
+
+print(f"Data directory exists: {data_exists}")
+print(f"Output directory exists: {output_exists}")
+print(f"Logs directory exists: {logs_exists}")
+print(f"Logs/app directory exists: {logs_app_exists}")
+print(f"Root items: {root_items}")
+"""
+
+    result = tool.invoke({"code": code})
+    assert "Data directory exists: True" in result
+    assert "Output directory exists: True" in result
+    assert "Logs directory exists: True" in result
+    assert "Logs/app directory exists: True" in result
+
+
+def test_combined_files_and_directories(pyodide_package: None) -> None:
+    """Test using both files and directories together."""
+    tool = PyodideSandboxTool(
+        allow_net=True,
+        allow_read=True,
+        files={"config.json": '{"app": "test"}', "data/input.txt": "Hello World"},
+        directories=["output", "logs"],
+    )
+
+    code = """
+import os
+import json
+
+# Read config file
+with open("config.json", "r") as f:
+    config = json.load(f)
+
+# Read input file  
+with open("data/input.txt", "r") as f:
+    content = f.read()
+
+# Write to output directory
+with open("output/result.txt", "w") as f:
+    f.write(f"App: {config['app']}, Content: {content}")
+
+# Check what was created
+output_files = os.listdir("output")
+root_items = sorted([item for item in os.listdir(".") if not item.startswith(".")])
+
+print(f"Config app: {config['app']}")
+print(f"Input content: {content}")
+print(f"Output files: {output_files}")
+print(f"Root items: {root_items}")
+"""
+
+    result = tool.invoke({"code": code})
+    assert "Config app: test" in result
+    assert "Input content: Hello World" in result
+    assert "result.txt" in result

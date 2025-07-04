@@ -4,7 +4,6 @@ import asyncio
 import dataclasses
 import json
 import logging
-import os
 import subprocess
 import time
 from typing import Annotated, Any, Literal
@@ -106,6 +105,7 @@ class BasePyodideSandbox:
         node_modules_dir: str = "auto",
         skip_deno_check: bool = False,
         files: dict[str, str | bytes] | None = None,
+        directories: list[str] | None = None,
     ) -> None:
         """Initialize the sandbox with specific Deno permissions.
 
@@ -165,12 +165,13 @@ class BasePyodideSandbox:
             skip_deno_check: If True, skip the check for Deno installation.
             files: Dictionary of files to attach to the sandbox filesystem.
                 Keys are file paths, values are file contents (str or bytes).
+            directories: List of directory paths to create in the sandbox filesystem.
         """
         self.stateful = stateful
         # List to store file information for binary streaming
         self._sandbox_files = []
         # List to store directory paths
-        self._sandbox_dirs = []
+        self._sandbox_dirs = list(directories) if directories else []
 
         if not skip_deno_check:
             # Check if Deno is installed
@@ -207,20 +208,17 @@ class BasePyodideSandbox:
 
         self.permissions.append(f"--node-modules-dir={node_modules_dir}")
 
-        # Attach files if provided during initialization
+        # Process files if provided during initialization
         if files:
             for path, content in files.items():
-                self.attach_file(path, content)
+                self._process_file(path, content)
 
-    def attach_file(
+    def _process_file(
         self,
         path: str,
         content: str | bytes,
     ) -> None:
-        """Attach a file to the sandbox filesystem using binary streaming.
-
-        Files are stored in memory and streamed to the sandbox process via stdin
-        using a binary protocol. Both text and binary files are supported.
+        """Process a file for attachment during initialization only.
 
         Args:
             path: Path where the file should be available in the sandbox
@@ -241,7 +239,7 @@ class BasePyodideSandbox:
                 }
             )
             logger.debug(
-                "Attached text file: %s (%d bytes)",
+                "Processed text file: %s (%d bytes)",
                 path,
                 len(content_bytes),
             )
@@ -251,7 +249,7 @@ class BasePyodideSandbox:
                 {"path": path, "content": content, "size": len(content), "binary": True}
             )
             logger.debug(
-                "Attached binary file: %s (%d bytes)",
+                "Processed binary file: %s (%d bytes)",
                 path,
                 len(content),
             )
@@ -259,48 +257,14 @@ class BasePyodideSandbox:
             msg = f"Content must be either a string or bytes, got {type(content)}"
             raise TypeError(msg)
 
-    def create_directory(self, path: str) -> None:
-        """Create a directory in the sandbox filesystem.
-
-        Args:
-            path: Directory path to create in the sandbox
-        """
-        self._sandbox_dirs.append(path)
-        logger.debug("Created directory: %s", path)
-
-    def clear_filesystem(self) -> dict[str, int]:
-        """Remove all files and directories from the sandbox filesystem.
-
-        Returns:
-            Dictionary with counts of removed files and directories
-        """
-        files_count = len(self._sandbox_files)
-        dirs_count = len(self._sandbox_dirs)
-
-        self._sandbox_files.clear()
-        self._sandbox_dirs.clear()
-
-        logger.debug("Cleared %d files and %d directories", files_count, dirs_count)
-        return {"files": files_count, "directories": dirs_count}
-
-    def get_attached_files(self) -> list[str]:
+    @property
+    def _attached_files(self) -> list[str]:
         """Get list of attached file paths.
 
         Returns:
             List of file paths currently attached to the sandbox
         """
         return [f["path"] for f in self._sandbox_files]
-
-    def has_file(self, path: str) -> bool:
-        """Check if a file is attached to the sandbox.
-
-        Args:
-            path: Path to check
-
-        Returns:
-            True if file exists, False otherwise
-        """
-        return any(f["path"] == path for f in self._sandbox_files)
 
     def _prepare_stdin_data(self) -> bytes | None:
         """Prepare data to be sent via stdin using binary streaming protocol.
@@ -769,39 +733,6 @@ class PyodideSandboxTool(BaseTool):
     _sync_sandbox: SyncPyodideSandbox | None = PrivateAttr(default=None)
     _custom_description: bool = PrivateAttr(default=False)
 
-    def model_post_init(self, /, __context) -> None:
-        """Initialize sandboxes after Pydantic model initialization."""
-        super().model_post_init(__context)
-
-        # Define args_schema based on stateful configuration
-        if self.stateful:
-            try:
-                from langgraph.prebuilt import InjectedState
-
-                class PyodideSandboxToolInput(BaseModel):
-                    """Python code to execute in the sandbox."""
-
-                    code: str = Field(description="Code to execute.")
-                    # these fields will be ignored by the LLM
-                    # and automatically injected by LangGraph's ToolNode
-                    state: Annotated[dict[str, Any] | BaseModel, InjectedState]
-                    tool_call_id: Annotated[str, InjectedToolCallId]
-
-            except ImportError as e:
-                error_msg = (
-                    "The 'langgraph' package is required when using a stateful sandbox."
-                    " Please install it with 'pip install langgraph'."
-                )
-                raise ImportError(error_msg) from e
-        else:
-
-            class PyodideSandboxToolInput(BaseModel):
-                """Python code to execute in the sandbox."""
-
-                code: str = Field(description="Code to execute.")
-
-        self.args_schema = PyodideSandboxToolInput
-
     def __init__(
         self,
         *,
@@ -809,6 +740,7 @@ class PyodideSandboxTool(BaseTool):
         timeout_seconds: float | None = 60,
         allow_net: list[str] | bool = False,
         files: dict[str, str | bytes] | None = None,
+        directories: list[str] | None = None,
         description: str | None = None,
         **kwargs: dict[str, Any],
     ) -> None:
@@ -828,6 +760,7 @@ class PyodideSandboxTool(BaseTool):
                 Please refer to pyodide documentation for more details.
             files: Dictionary of files to attach to the sandbox filesystem.
                 Keys are file paths, values are file contents (str or bytes).
+            directories: List of directory paths to create in the sandbox filesystem.
             description: Custom description template for the tool.
             **kwargs: Other attributes will be passed to the PyodideSandbox
         """
@@ -847,6 +780,34 @@ class PyodideSandboxTool(BaseTool):
         # Call super().__init__() first
         super().__init__(**init_kwargs)
 
+        if self.stateful:
+            try:
+                from langgraph.prebuilt import InjectedState
+            except ImportError as e:
+                error_msg = (
+                    "The 'langgraph' package is required when using a stateful sandbox."
+                    " Please install it with 'pip install langgraph'."
+                )
+                raise ImportError(error_msg) from e
+
+            class PyodideSandboxToolInput(BaseModel):
+                """Python code to execute in the sandbox."""
+
+                code: str = Field(description="Code to execute.")
+                # these fields will be ignored by the LLM
+                # and automatically injected by LangGraph's ToolNode
+                state: Annotated[dict[str, Any] | BaseModel, InjectedState]
+                tool_call_id: Annotated[str, InjectedToolCallId]
+
+        else:
+
+            class PyodideSandboxToolInput(BaseModel):
+                """Python code to execute in the sandbox."""
+
+                code: str = Field(description="Code to execute.")
+
+        self.args_schema = PyodideSandboxToolInput
+
         # Set up custom description if provided
         if description is not None:
             self._custom_description = True
@@ -864,6 +825,7 @@ class PyodideSandboxTool(BaseTool):
             allow_ffi=self.allow_ffi,
             node_modules_dir=self.node_modules_dir,
             files=files,
+            directories=directories,
         )
 
         # Initialize sync sandbox with deno check skipped since async sandbox already
@@ -879,6 +841,7 @@ class PyodideSandboxTool(BaseTool):
             node_modules_dir=self.node_modules_dir,
             skip_deno_check=True,  # Skip deno check since async sandbox already checked
             files=files,
+            directories=directories,
         )
 
         if not self._custom_description or (
@@ -898,7 +861,8 @@ class PyodideSandboxTool(BaseTool):
         ):
             return self._description_template
 
-        files = self._sandbox.get_attached_files()
+        # Use the property from the base class to get attached files
+        files = self._sandbox._attached_files
         if files:
             available_files = (
                 "\n\nATTACHED FILES AVAILABLE:\n"
@@ -910,73 +874,6 @@ class PyodideSandboxTool(BaseTool):
             available_files = ""
 
         return self._description_template.format(available_files=available_files)
-
-    def _update_description(self) -> None:
-        """Update the description with current file information."""
-        # Only update description if using default template or custom template with placeholder
-        if (
-            not self._custom_description
-            or "{available_files}" in self._description_template
-        ):
-            self.description = self._build_description()
-
-    def attach_file(
-        self,
-        path: str,
-        content: str | bytes,
-    ) -> None:
-        """Attach a file to the sandbox environment.
-
-        Args:
-            path: Path where the file should be available in the sandbox
-            content: File content as string (for text files) or bytes (for binary files)
-        """
-        self._sandbox.attach_file(path, content)
-        self._sync_sandbox.attach_file(path, content)
-        self._update_description()
-
-    def create_directory(self, path: str) -> None:
-        """Create a directory in the sandbox environment.
-
-        Args:
-            path: Directory path to create in the sandbox
-        """
-        self._sandbox.create_directory(path)
-        self._sync_sandbox.create_directory(path)
-        self._update_description()
-
-    def clear_filesystem(self) -> dict[str, int]:
-        """Remove all files and directories from the sandbox environment.
-
-        Returns:
-            Dictionary with counts of removed files and directories
-        """
-        result_async = self._sandbox.clear_filesystem()
-        result_sync = self._sync_sandbox.clear_filesystem()
-        self._update_description()
-        return {
-            "files": max(result_async["files"], result_sync["files"]),
-            "directories": max(result_async["directories"], result_sync["directories"]),
-        }
-
-    def get_attached_files(self) -> list[str]:
-        """Get list of attached file paths.
-
-        Returns:
-            List of file paths currently attached to the sandbox
-        """
-        return self._sandbox.get_attached_files()
-
-    def has_file(self, path: str) -> bool:
-        """Check if a file is attached to the sandbox.
-
-        Args:
-            path: Path to check
-
-        Returns:
-            True if file exists, False otherwise
-        """
-        return self._sandbox.has_file(path)
 
     def _run(
         self,
@@ -990,7 +887,8 @@ class PyodideSandboxTool(BaseTool):
 
         Args:
             code: The code to execute in the sandbox
-            state: State object containing session information (required for stateful mode)
+            state: State object containing session information
+                (required for stateful mode)
             tool_call_id: ID of the tool call for message creation
             config: Configuration for the tool execution
             run_manager: Callback manager for the tool run
