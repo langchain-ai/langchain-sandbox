@@ -46,13 +46,14 @@ def find_imports_to_install(imports: list[str]) -> list[InstallEntry]:
 
     to_install: list[InstallEntry] = []
     for module in imports:
+        top_level_module = module.split(".")[0]
         try:
-            importlib.import_module(module)
+            importlib.import_module(top_level_module)
         except ModuleNotFoundError:
             to_install.append(
                 dict(
-                    module=module,
-                    package=to_package_name.get(module, module),
+                    module=top_level_module,
+                    package=to_package_name.get(top_level_module, top_level_module),
                 )
             )
     return to_install
