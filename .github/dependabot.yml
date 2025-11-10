@@ -1,0 +1,36 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /.github
+    schedule:
+      interval: 'weekly'
+      day: 'sunday'
+      time: '14:00'
+      timezone: 'Asia/Jerusalem'
+    open-pull-requests-limit: 10
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: 'weekly'
+      day: 'sunday'
+      time: '14:00'
+      timezone: 'Asia/Jerusalem'
+    open-pull-requests-limit: 10
+    ignore:
+      - dependency-name: '*'
+        update-types:
+          - version-update:semver-patch
+  - package-ecosystem: pip
+    directory: /apps/ai
+    schedule:
+      interval: 'weekly'
+      day: 'sunday'
+      time: '14:00'
+      timezone: 'Asia/Jerusalem'
+    open-pull-requests-limit: 10
+    ignore:
+      - dependency-name: '*'
+        update-types:
+          - version-update:semver-patch
+      - dependency-name: 'python'
+        versions: ['> 3.13.0']
