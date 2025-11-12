@@ -37,3 +37,9 @@ Deno.test("runPython with error - name error", async () => {
   // Check that error contains NameError
   assertEquals(result.error?.includes("NameError"), true);
 });
+
+Deno.test("runPython with multi-line print", async () => {
+  const result = await runPython("print('hello\\nworld')", {});
+  assertEquals(result.success, true);
+  assertEquals(result.stdout?.join('\n'), "hello\nworld");
+});
