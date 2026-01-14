@@ -1,6 +1,6 @@
 We are currently not maintaing this package. It's relatively easy to get code execution these days through either sandbox APIs or through LLM provider APIs.
 
-As a result, we do not recommend using langchain-sandbox for any production use cases. You are welcome to fork the code for your own use cases!
+As a result, we do not recommend using `langchain-sandbox` for any production use cases. You are welcome to fork the code for your own use cases!
 
 -----
 
