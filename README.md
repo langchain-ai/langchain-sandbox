@@ -1,9 +1,7 @@
-We are currently not maintaing this package. It's relatively easy to get code execution these days through either sandbox APIs or through LLM provider APIs.
-
-As a result, we do not recommend using `langchain-sandbox` for any production use cases. You are welcome to fork the code for your own use cases!
-
------
-
+> [!WARNING]
+> This package is no longer maintained. These days we recommend accessing code execution either through sandbox APIs or LLM provider APIs.
+>
+> We do not recommend using `langchain-sandbox` for any production use cases. You are welcome to fork the code for your own use cases!
 # 🛡️ LangChain Sandbox
 
 > A secure environment for running Python code using Pyodide (WebAssembly) and Deno
