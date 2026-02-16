@@ -165,7 +165,7 @@ class BasePyodideSandbox:
         if not skip_deno_check:
             # Check if Deno is installed
             try:
-                subprocess.run(["deno", "--version"], check=True, capture_output=True)  # noqa: S607, S603
+                subprocess.run(["deno", "--version"], check=True, capture_output=True)  # noqa: S607
             except subprocess.CalledProcessError as e:
                 msg = "Deno is installed, but running it failed."
                 raise RuntimeError(msg) from e
@@ -564,7 +564,7 @@ class PyodideSandboxTool(BaseTool):
 
         if self.stateful:
             try:
-                from langgraph.prebuilt import InjectedState
+                from langgraph.prebuilt import InjectedState  # noqa: PLC0415
             except ImportError as e:
                 error_msg = (
                     "The 'langgraph' package is required when using a stateful sandbox."
@@ -656,7 +656,7 @@ class PyodideSandboxTool(BaseTool):
             tool_result = result.stdout
 
         if self.stateful:
-            from langgraph.types import Command
+            from langgraph.types import Command  # noqa: PLC0415
 
             # if the tool is used with a stateful sandbox,
             # we need to update the graph state with the new session bytes and metadata
@@ -718,7 +718,7 @@ class PyodideSandboxTool(BaseTool):
             tool_result = result.stdout
 
         if self.stateful:
-            from langgraph.types import Command
+            from langgraph.types import Command  # noqa: PLC0415
 
             # if the tool is used with a stateful sandbox,
             # we need to update the graph state with the new session bytes and metadata
