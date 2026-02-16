@@ -94,7 +94,7 @@ async def install_imports(
 
         for entry in to_install:
             try:
-                await micropip.install(entry["package"])
+                await micropip.install(entry["package"], verbose=False)
             except Exception as e:
                 message_callback("failed", entry["package"])
                 break # Fail fast
@@ -217,6 +217,7 @@ async function runPython(
     });
     await initPyodide(pyodide);
 
+
     // Determine session directory
     let sessionMetadata: SessionMetadata;
     if (options.sessionMetadata) {
@@ -254,6 +255,8 @@ async function runPython(
         }
       }
     );
+
+    output.length = 0; // Clear output after installation
 
     if (installErrors.length > 0) {
       // Restore the original console.log function

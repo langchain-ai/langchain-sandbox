@@ -9,9 +9,10 @@
     "run": "deno run -N -R=node_modules -W=node_modules --node-modules-dir=auto ./main.ts"
   },
   "imports": {
-    "@std/assert": "jsr:@std/assert@1",
-    "@std/cli": "jsr:@std/cli@^1.0.16",
-    "@std/path": "jsr:@std/path@^1.0.8"
+    "@std/assert": "jsr:@std/assert@^1.0.13",
+    "@std/cli": "jsr:@std/cli@^1.0.21",
+    "@std/path": "jsr:@std/path@^1.1.1",
+    "pyodide": "npm:pyodide@^0.28.0"
   },
   "publish": {
     "include": ["main.ts", "README.md", "LICENSE"],
